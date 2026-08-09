@@ -9,18 +9,6 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 /**
  * @title DonationAttackTest
  * @dev Tests ERC-4626 donation/inflation attack vectors and virtual-offset mitigation.
- *
- * Attack Sequence:
- * 1. Attacker deposits minimal assets into empty vault
- * 2. Attacker receives minimal shares
- * 3. Attacker donates assets directly to vault
- * 4. Donation changes apparent share-to-asset exchange rate
- * 5. Later depositor receives too few shares due to rounding
- * 6. In extreme cases, later depositor receives zero shares
- * 7. Attacker extracts value through manipulated share ownership
- *
- * Mitigation: Virtual assets, virtual shares, configurable decimals offset.
- * Shares = Assets * (TotalSupply + 10^offset) / (TotalAssets + 1)
  */
 contract MockAsset is ERC20 {
     constructor() ERC20("Mock Asset", "MA") {}
@@ -33,6 +21,7 @@ contract MockAsset is ERC20 {
 contract DonationAttackTest is Test {
     MockAsset asset;
     DIBSVault vault;
+    uint256 constant SEED_AMOUNT = 1e12;
 
     function setUp() public {
         asset = new MockAsset();
@@ -43,17 +32,28 @@ contract DonationAttackTest is Test {
         asset.mint(address(0x1), 1e24);
         asset.mint(address(0x2), 1e24);
         asset.mint(address(0x3), 1e24);
+
+        // Seed the vault with non-redeemable initial liquidity
+        vault.setMinimumSeedDeposit(SEED_AMOUNT);
+        asset.approve(address(vault), SEED_AMOUNT);
+        vault.seedVault(SEED_AMOUNT, 0); // permanent lock
+    }
+
+    function _seedVault(DIBSVault v, uint256 amount) internal {
+        v.setMinimumSeedDeposit(amount);
+        asset.approve(address(v), amount);
+        v.seedVault(amount, 0);
     }
 
     /**
      * Test: Direct donation should not prevent subsequent depositors from receiving shares.
      */
     function test_DonationAttack_VirtualOffsetMitigation() public {
-        // Attacker deposits minimal amount
+        // Attacker deposits (scaled relative to seed)
         address attacker = address(0x1);
         vm.startPrank(attacker);
         asset.approve(address(vault), type(uint256).max);
-        uint256 attackerShares = vault.deposit(1e6, attacker);
+        uint256 attackerShares = vault.deposit(1e12, attacker);
         vm.stopPrank();
 
         // Attacker donates large amount directly to vault
@@ -75,16 +75,13 @@ contract DonationAttackTest is Test {
 
     /**
      * Test: Minimum shares out enforcement prevents dust deposits after donation inflates exchange rate.
-     * With virtual offset of 6, a 1-wei deposit into an empty vault produces 1e6 shares (above MIN).
-     * But after a large donation skews the exchange rate, a 1-wei deposit produces ~0 shares,
-     * which is below MIN_SHARES_OUT (1e3) and should revert.
      */
     function test_MinSharesOut_RevertsOnDustDeposit() public {
         // First depositor establishes a position
         address first = address(0x1);
         vm.startPrank(first);
         asset.approve(address(vault), type(uint256).max);
-        vault.deposit(1e6, first);
+        vault.deposit(1e12, first);
         vm.stopPrank();
 
         // Donate large amount to inflate exchange rate
@@ -103,18 +100,19 @@ contract DonationAttackTest is Test {
      * Test: Deposit cap enforcement.
      */
     function test_DepositCap_Enforced() public {
-        DIBSVault cappedVault = new DIBSVault(asset, "Capped", "CAP", 1e18);
+        DIBSVault cappedVault = new DIBSVault(asset, "Capped", "CAP", 2e18);
+        _seedVault(cappedVault, 1e12);
 
         address user = address(0x1);
         vm.startPrank(user);
         asset.approve(address(cappedVault), type(uint256).max);
 
-        // Deposit up to cap
+        // Deposit up to remaining cap (2e18 - 1e12 seed ≈ 2e18)
         cappedVault.deposit(1e18, user);
 
-        // Deposit beyond cap should revert
+        // Another deposit should exceed cap
         vm.expectRevert("DIBS: deposit cap exceeded");
-        cappedVault.deposit(1, user);
+        cappedVault.deposit(1e18, user);
         vm.stopPrank();
     }
 

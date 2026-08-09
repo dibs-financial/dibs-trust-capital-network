@@ -78,10 +78,21 @@ contract CapitalPreservationModeTest is Test {
         sentinel.setPreservationManager(address(manager));
         catalyst.setPreservationManager(address(manager));
 
-        // Mint tokens to users
+        // Mint tokens to users and admin
+        asset.mint(admin, 1000e18);
         asset.mint(user1, 1000e18);
         asset.mint(user2, 1000e18);
         asset.mint(user3, 1000e18);
+
+        // Seed both vaults with small non-redeemable initial liquidity
+        // (small amount to minimize impact on JuniorRatio computation)
+        sentinel.setMinimumSeedDeposit(1e12);
+        asset.approve(address(sentinel), 1e12);
+        sentinel.seedVault(1e12, 0);
+
+        catalyst.setMinimumSeedDeposit(1e12);
+        asset.approve(address(catalyst), 1e12);
+        catalyst.seedVault(1e12, 0);
 
         // Initial deposits: 80% Sentinel, 20% Catalyst (JuniorRatio = 20%)
         vm.startPrank(user1);
@@ -183,7 +194,7 @@ contract CapitalPreservationModeTest is Test {
         // Try to withdraw from Sentinel — should revert
         vm.startPrank(user1);
         vm.expectRevert("DIBS: Sentinel withdrawals blocked during preservation mode");
-        sentinel.redeem(1e18, user1, user1);
+        sentinel.withdraw(1e18, user1, user1);
         vm.stopPrank();
     }
 
@@ -196,9 +207,10 @@ contract CapitalPreservationModeTest is Test {
 
         manager.checkAndTrigger();
 
-        // Queue a withdrawal
+        // Queue a withdrawal (assets, shares)
         vm.startPrank(user1);
-        sentinel.queueWithdrawal(1e18, 1e18);
+        uint256 queueShares = sentinel.previewWithdraw(1e18);
+        sentinel.queueWithdrawal(1e18, queueShares);
         vm.stopPrank();
 
         assertEq(sentinel.queueLength(), 1, "Queue should have 1 request");
@@ -219,7 +231,7 @@ contract CapitalPreservationModeTest is Test {
         // Try to withdraw from Catalyst — should revert
         vm.startPrank(user2);
         vm.expectRevert("DIBS: Catalyst distributions suspended during preservation mode");
-        catalyst.redeem(1e18, user2, user2);
+        catalyst.withdraw(1e18, user2, user2);
         vm.stopPrank();
     }
 
@@ -318,7 +330,8 @@ contract CapitalPreservationModeTest is Test {
 
         // Queue withdrawal
         vm.startPrank(user1);
-        sentinel.queueWithdrawal(1e18, 1e18);
+        uint256 qShares = sentinel.previewWithdraw(1e18);
+        sentinel.queueWithdrawal(1e18, qShares);
         vm.stopPrank();
 
         assertEq(sentinel.pendingQueueCount(), 1);
@@ -392,8 +405,8 @@ contract CapitalPreservationModeTest is Test {
         assertFalse(active);
         assertEq(ratio, 2000);
         assertEq(minRatio, MIN_JUNIOR_RATIO_BPS);
-        assertEq(senNAV, SENTINEL_DEPOSIT);
-        assertEq(catNAV, CATALYST_DEPOSIT);
+        assertEq(senNAV, SENTINEL_DEPOSIT + 1e12);
+        assertEq(catNAV, CATALYST_DEPOSIT + 1e12);
         assertEq(senReserve, 0);
         assertEq(shortfall, 0);
         assertEq(queueLen, 0);
