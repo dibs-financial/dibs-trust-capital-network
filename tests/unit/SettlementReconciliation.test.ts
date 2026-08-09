@@ -146,7 +146,7 @@ describe('Reconciliation Engine', () => {
     await reconciliation.createReconciliation(instruction, 'tenant_1');
 
     const confirmed = await service.recordConfirmation(instruction.instructionId, {
-      confirmationHash: '0xabc',
+      confirmationHash: '0xdef',
       confirmedAmount: 500000,
       confirmedTimestamp: new Date().toISOString(),
       tenantId: 'tenant_1',
@@ -185,7 +185,6 @@ describe('Reconciliation Engine', () => {
   });
 
   it('blocks releases when unresolved exceptions exist', async () => {
-    // Create an instruction with exception
     const instruction = await service.createInstruction({
       requestId: 'req_3',
       amount: 500000,
@@ -201,11 +200,14 @@ describe('Reconciliation Engine', () => {
 
     await reconciliation.createReconciliation(instruction, 'tenant_1');
 
-    await service.recordException(instruction.instructionId, {
+    const exceptionInstruction = await service.recordException(instruction.instructionId, {
       exceptionType: 'TRANSMISSION_FAILURE',
       exceptionDescription: 'Partner API returned 500',
       tenantId: 'tenant_1',
     });
+
+    // Trigger reconciliation to detect and record the exception
+    await reconciliation.reconcile(exceptionInstruction, 'tenant_1');
 
     const hasUnresolved = reconciliation.hasUnresolvedExceptions('tenant_1');
     expect(hasUnresolved).toBe(true);
@@ -227,11 +229,13 @@ describe('Reconciliation Engine', () => {
 
     await reconciliation.createReconciliation(instruction, 'tenant_1');
 
-    await service.recordException(instruction.instructionId, {
+    const exceptionInstruction = await service.recordException(instruction.instructionId, {
       exceptionType: 'TRANSMISSION_FAILURE',
       exceptionDescription: 'Partner API returned 500',
       tenantId: 'tenant_1',
     });
+
+    await reconciliation.reconcile(exceptionInstruction, 'tenant_1');
 
     const exceptions = reconciliation.getUnresolvedExceptions('tenant_1');
     expect(exceptions.length).toBe(1);
