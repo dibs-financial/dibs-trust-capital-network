@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+lib/
+out/
+cache/
+dist/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Foundry
+out/
+cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Secrets — NEVER commit
+*.key
+*.pem
+secrets/

@@ -1,0 +1,16 @@
+{
+  "name": "dibs-shared",
+  "version": "0.0.1",
+  "private": true,
+  "description": "DIBS Trust Capital Network — Shared types, schemas, formulas, events, and validation",
+  "license": "UNLICENSED",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0",
+    "@types/node": "^20.14.0"
+  }
+}

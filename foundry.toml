@@ -1,0 +1,16 @@
+[profile.default]
+src = "contracts"
+out = "out"
+libs = ["lib"]
+test = "tests"
+
+[fuzz]
+runs = 10000
+max_test_rejects = 1000000
+
+[invariant]
+runs = 256
+depth = 128
+fail_on_revert = true
+
+# See more config options https://book.getfoundry.sh/reference/config.html

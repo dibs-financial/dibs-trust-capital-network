@@ -1,0 +1,24 @@
+{
+  "name": "dibs-trust-capital-network",
+  "version": "0.0.1",
+  "private": true,
+  "description": "DIBS Trust Capital Network — Enterprise controlled-capital infrastructure",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "backend",
+    "frontend",
+    "shared"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "test": "npm run test --workspaces",
+    "typecheck": "npm run typecheck --workspaces",
+    "contracts:build": "forge build",
+    "contracts:test": "forge test",
+    "contracts:fuzz": "forge test --fuzz-runs 10000",
+    "contracts:invariant": "forge test --match-test invariant"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
