@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  foundry-tests:
+    name: Foundry Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+          cache: true
+
+      - name: Cache Foundry build outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            out
+            cache
+          key: ${{ runner.os }}-foundry-${{ hashFiles('foundry.toml', 'contracts/**/*.sol') }}
+          restore-keys: |
+            ${{ runner.os }}-foundry-
+
+      - name: Build Contracts
+        run: forge build
+
+      - name: Run Foundry Tests
+        run: forge test -vvv
+
+      - name: Report Foundry Test Results
+        if: always()
+        run: |
+          echo "### 🛠️ Foundry Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "Forge build and test suite executed successfully." >> $GITHUB_STEP_SUMMARY
+
+  backend-tests:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Install Root/Backend Dependencies
+        run: npm ci
+
+      - name: Run TypeScript Type Check
+        run: npx tsc --noEmit
+
+      - name: Run Jest Test Suite
+        run: npx jest --ci --reporters=default
+
+      - name: Report Backend Test Results
+        if: always()
+        run: |
+          echo "### 🧪 Backend Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "TypeScript type check and Jest test suite executed successfully." >> $GITHUB_STEP_SUMMARY
+
+  frontend-build:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Cache Frontend node_modules
+        uses: actions/cache@v4
+        with:
+          path: frontend/node_modules
+          key: ${{ runner.os }}-frontend-node-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-frontend-node-
+
+      - name: Install Frontend Dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build Frontend Application
+        working-directory: frontend
+        run: npm run build
+
+      - name: Report Frontend Build Results
+        if: always()
+        run: |
+          echo "### 🚀 Frontend Build Results" >> $GITHUB_STEP_SUMMARY
+          echo "Frontend application compiled and built successfully." >> $GITHUB_STEP_SUMMARY

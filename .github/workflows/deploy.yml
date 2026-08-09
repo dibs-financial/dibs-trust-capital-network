@@ -1,0 +1,134 @@
+name: Production Deployment (Stub)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment target environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+# ==============================================================================
+# ENVIRONMENT VARIABLES & SECRETS DOCUMENTATION
+# ==============================================================================
+# The following environment variables and secrets must be configured in GitHub Secrets
+# / Environment variables before enabling production deployment:
+#
+# Smart Contract Deployment:
+# - MAINNET_RPC_URL        : RPC endpoint URL for Ethereum mainnet / target EVM L1/L2 network
+# - SEPOLIA_RPC_URL        : RPC endpoint URL for Sepolia testnet
+# - CHAIN_ID               : Target EVM chain ID (e.g., 1 for Mainnet, 11155111 for Sepolia)
+# - DEPLOYER_PRIVATE_KEY   : Hex-encoded private key of deployer wallet (Keep Secret!)
+# - ETHERSCAN_API_KEY      : Etherscan/Block explorer API key for contract verification
+#
+# Backend Infrastructure:
+# - PORT                   : HTTP port for backend API server (default: 3000)
+# - NODE_ENV               : Runtime environment ('production', 'staging', 'development')
+# - DATABASE_URL           : PostgreSQL / Primary datastore connection string
+# - REDIS_URL              : Redis cache / pub-sub connection string
+# - JWT_SECRET             : Secret key used to sign and verify JSON Web Tokens
+# - API_SECRET_KEY         : Internal API secret for backend inter-service calls
+#
+# External Integrations:
+# - VRDCT_API_KEY          : API credential for VRDCT Trust Signal & Risk Monitoring API
+# - VRDCT_ENDPOINT_URL     : Base URL for VRDCT API endpoints
+# - SETTLEMENT_BANK_API_KEY: Institutional banking / settlement partner API credential
+# - SETTLEMENT_BANK_URL    : Base URL for banking settlement service
+#
+# Frontend Web App:
+# - VITE_API_BASE_URL      : Base URL of backend API for client requests (e.g., https://api.dibs.network)
+# - VITE_CHAIN_ID          : EVM Chain ID target for web3 provider / wallet connections
+# ==============================================================================
+
+jobs:
+  deploy-contracts:
+    name: Deploy Smart Contracts
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Deploy Contracts (Stub)
+        env:
+          RPC_URL: ${{ secrets.MAINNET_RPC_URL }}
+          PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
+          ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
+        run: |
+          echo "============================================================"
+          echo "STUB: Smart Contract Deployment"
+          echo "Target Network RPC: ${RPC_URL:-'Not Configured'}"
+          echo "============================================================"
+          echo "To enable deployment, uncomment the Forge deployment script below:"
+          # forge script script/Deploy.s.sol --rpc-url $RPC_URL --private-key $PRIVATE_KEY --broadcast --verify
+
+  deploy-backend:
+    name: Deploy Backend API
+    needs: deploy-contracts
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build & Deploy Backend (Stub)
+        env:
+          NODE_ENV: production
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          VRDCT_API_KEY: ${{ secrets.VRDCT_API_KEY }}
+        run: |
+          echo "============================================================"
+          echo "STUB: Backend API Deployment"
+          echo "Node Environment: $NODE_ENV"
+          echo "============================================================"
+          echo "To enable deployment, uncomment the deployment pipeline steps:"
+          # npm ci
+          # npm run build
+          # docker build -t dibs-backend:latest .
+          # aws ecr / gcr upload & deploy to ECS/K8s/Cloud Run
+
+  deploy-frontend:
+    name: Deploy Frontend App
+    needs: deploy-backend
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build & Deploy Frontend (Stub)
+        env:
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+          VITE_CHAIN_ID: ${{ secrets.VITE_CHAIN_ID }}
+        run: |
+          echo "============================================================"
+          echo "STUB: Frontend Static App Deployment"
+          echo "API Base URL: ${VITE_API_BASE_URL:-'https://api.dibs.network'}"
+          echo "============================================================"
+          echo "To enable deployment, uncomment build and sync steps:"
+          # cd frontend
+          # npm ci
+          # npm run build
+          # aws s3 sync dist/ s3://dibs-frontend-production --delete
+          # aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_DIST_ID --paths "/*"
