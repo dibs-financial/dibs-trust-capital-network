@@ -23,7 +23,7 @@ export interface CovenantDefinition {
   covenantId: string;
   category: CovenantCategory;
   threshold: number;
-  tolerance: number;        // Warning threshold proximity
+  tolerance: number;        // Warning threshold proximity (percentage, e.g., 10 for 10%)
   evaluationCadence: 'continuous' | 'daily' | 'weekly' | 'monthly' | 'quarterly';
   cureDeadlineDays: number;
   tenantId: string;
@@ -68,6 +68,18 @@ export interface CovenantEvaluation {
   alerts: string[];
 }
 
+function isHigherWorse(category: CovenantCategory): boolean {
+  const higherIsWorseList: CovenantCategory[] = [
+    'loan_to_value',
+    'construction_budget_variance',
+    'completion_date_variance',
+    'collateral_concentration',
+    'portfolio_leverage',
+    'cross_default',
+  ];
+  return higherIsWorseList.includes(category);
+}
+
 /**
  * Evaluate a single covenant against its threshold.
  * Returns the covenant state and any alert triggers.
@@ -77,52 +89,41 @@ export function evaluateCovenant(
   measuredValue: number
 ): { state: CovenantState; alerts: string[] } {
   const { threshold, tolerance } = definition;
-  const warningBoundary = threshold * (1 - tolerance / 100);
+  const higherWorse = isHigherWorse(definition.category);
 
-  if (isBreached(definition.category, measuredValue, threshold)) {
-    return {
-      state: 'breached',
-      alerts: ['COVENANT_BREACH_DETECTED', 'CURE_PERIOD_REQUIRED'],
-    };
-  }
-
-  if (isWarning(definition.category, measuredValue, warningBoundary, threshold)) {
-    return {
-      state: 'warning',
-      alerts: ['COVENANT_THRESHOLD_APPROACHING'],
-    };
+  if (higherWorse) {
+    // e.g. LTV threshold = 0.75, tolerance = 10% (warning boundary = 0.675)
+    const warningBoundary = threshold * (1 - tolerance / 100);
+    if (measuredValue > threshold) {
+      return {
+        state: 'breached',
+        alerts: ['COVENANT_BREACH_DETECTED', 'CURE_PERIOD_REQUIRED'],
+      };
+    }
+    if (measuredValue > warningBoundary) {
+      return {
+        state: 'warning',
+        alerts: ['COVENANT_THRESHOLD_APPROACHING'],
+      };
+    }
+  } else {
+    // e.g. DSCR threshold = 1.25, tolerance = 10% (breach boundary = 1.125)
+    const breachBoundary = threshold * (1 - tolerance / 100);
+    if (measuredValue < breachBoundary) {
+      return {
+        state: 'breached',
+        alerts: ['COVENANT_BREACH_DETECTED', 'CURE_PERIOD_REQUIRED'],
+      };
+    }
+    if (measuredValue < threshold) {
+      return {
+        state: 'warning',
+        alerts: ['COVENANT_THRESHOLD_APPROACHING'],
+      };
+    }
   }
 
   return { state: 'compliant', alerts: [] };
-}
-
-/**
- * Covenant breach logic varies by category.
- * Some covenants breach when value > threshold (e.g., LTV, leverage).
- * Others breach when value < threshold (e.g., DSCR, liquidity, occupancy).
- */
-function isBreached(category: CovenantCategory, value: number, threshold: number): boolean {
-  const higherIsWorse: CovenantCategory[] = [
-    'loan_to_value', 'construction_budget_variance', 'completion_date_variance',
-    'collateral_concentration', 'portfolio_leverage', 'cross_default',
-  ];
-
-  if (higherIsWorse.includes(category)) {
-    return value > threshold;
-  }
-  return value < threshold;
-}
-
-function isWarning(category: CovenantCategory, value: number, warningBoundary: number, threshold: number): boolean {
-  const higherIsWorse: CovenantCategory[] = [
-    'loan_to_value', 'construction_budget_variance', 'completion_date_variance',
-    'collateral_concentration', 'portfolio_leverage', 'cross_default',
-  ];
-
-  if (higherIsWorse.includes(category)) {
-    return value > warningBoundary && value <= threshold;
-  }
-  return value < warningBoundary && value >= threshold;
 }
 
 /**

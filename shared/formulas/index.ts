@@ -105,7 +105,7 @@ export function calculateRAYE(netYield: number, economicCapitalAtRisk: number): 
  * integration scope, compliance cost, customer concentration, AUM volatility,
  * unproven renewal behavior.
  */
-export function calculateLTV(acv: number, grossMargin: number, annualChurn: number): number {
+export function calculateEnterpriseLTV(acv: number, grossMargin: number, annualChurn: number): number {
   if (annualChurn === 0) return Infinity;
   return (acv * grossMargin) / annualChurn;
 }

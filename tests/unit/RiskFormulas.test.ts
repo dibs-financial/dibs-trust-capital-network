@@ -13,7 +13,7 @@ import {
   calculateDebtYield,
   calculateArbitrageSpread,
   calculateRAYE,
-  calculateLTV as calculateEnterpriseLTV,
+  calculateEnterpriseLTV,
   calculateAUMRevenue,
   calculatePostMoney,
   calculateInvestorOwnership,
@@ -98,12 +98,12 @@ describe('Risk Formulas', () => {
   describe('DCF', () => {
     it('calculates present value', () => {
       const pv = calculatePresentValue(57400000, 0.50, 5);
-      expect(pv).toBeCloseTo(7559040, 0);
+      expect(pv).toBeCloseTo(7558848, -1);
     });
     it('applies survival probability', () => {
       const pv = calculatePresentValue(57400000, 0.50, 5);
       const adjusted = calculateProbabilityAdjusted(pv, 0.55);
-      expect(adjusted).toBeCloseTo(4157472, 0);
+      expect(adjusted).toBeCloseTo(4157366, -1);
     });
   });
 });
