@@ -27,7 +27,7 @@ export interface ReconciliationRecord {
   variance: number | null;
   status: ReconciliationStatus;
   timestamp: string;
-  varianceType?: 'amount_mismatch' | 'timing_mismatch' | 'missing_confirmation';
+  varianceType?: 'amount_mismatch' | 'timing_mismatch' | 'missing_confirmation' | 'failed_settlement';
   varianceDescription?: string;
   resolvedAt?: string;
   resolutionNotes?: string;

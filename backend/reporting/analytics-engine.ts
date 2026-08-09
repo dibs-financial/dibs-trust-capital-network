@@ -210,7 +210,7 @@ export class AnalyticsEngine {
       juniorRatioTrend: [],
       minJuniorRatio: 0.20,
       preservationModeTriggerCount: preservationTriggers.length,
-      preservationDurationHours: Math.round(preservationDurationHours * 100) / 100,
+      preservationModeDurationHours: Math.round(preservationDurationHours * 100) / 100,
       reserveCoverageRatio: 0,
       withdrawalQueueDepth: 0,
       avgWithdrawalQueueTimeHours: 0,

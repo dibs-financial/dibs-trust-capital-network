@@ -18,6 +18,17 @@
 
 import { Router } from 'express';
 
+// Extend Express Request with tenant context
+declare global {
+  namespace Express {
+    interface Request {
+      tenantId?: string;
+      apiKey?: any;
+    }
+  }
+}
+
+
 export type ApiTier = 'growth' | 'institutional' | 'enterprise';
 
 export interface ApiKey {
@@ -66,7 +77,7 @@ export const TIER_RATE_LIMITS: Record<ApiTier, { perMinute: number; perHour: num
 };
 
 export class ApiKeyManager {
-  private keys: Map<string, ApiKey> = new Map();
+  public keys: Map<string, ApiKey> = new Map();
   private tenantKeys: Map<string, Set<string>> = new Map();
 
   /**
@@ -183,13 +194,13 @@ export function createApiMarketplaceRouter(keyManager: ApiKeyManager): Router {
    * Expects header: X-DIBS-API-Key
    */
   router.use((req, res, next) => {
-    const keyId = req.headers['x-dibs-api-key'] as string;
+    const keyId = (req.headers['x-dibs-api-key'] as string) || '';
     if (!keyId) {
       return res.status(401).json({ error: 'API_KEY_REQUIRED' });
     }
 
     // Basic validation — specific scope check happens per route
-    const apiKey = keyManager.keys.get(keyId);
+    const apiKey = keyManager.keys.get(keyId as string);
     if (!apiKey || !apiKey.active) {
       return res.status(401).json({ error: 'INVALID_API_KEY' });
     }
@@ -226,7 +237,7 @@ export function createApiMarketplaceRouter(keyManager: ApiKeyManager): Router {
    */
   router.get('/v1/capital-requests', requireScope('read:capital_requests'), (req, res) => {
     // TODO: Proxy to capital request service
-    res.json({ tenantId: req.tenantId, requests: [] });
+    res.json({ tenantId: req.tenantId || '', requests: [] });
   });
 
   /**
@@ -234,7 +245,7 @@ export function createApiMarketplaceRouter(keyManager: ApiKeyManager): Router {
    */
   router.post('/v1/capital-requests', requireScope('write:capital_requests'), (req, res) => {
     // TODO: Proxy to capital request service
-    res.status(201).json({ tenantId: req.tenantId, requestId: 'pending' });
+    res.status(201).json({ tenantId: req.tenantId || '', requestId: 'pending' });
   });
 
   /**
@@ -242,7 +253,7 @@ export function createApiMarketplaceRouter(keyManager: ApiKeyManager): Router {
    */
   router.get('/v1/covenants', requireScope('read:covenants'), (req, res) => {
     // TODO: Proxy to covenant engine
-    res.json({ tenantId: req.tenantId, covenants: [] });
+    res.json({ tenantId: req.tenantId || '', covenants: [] });
   });
 
   /**
@@ -250,7 +261,7 @@ export function createApiMarketplaceRouter(keyManager: ApiKeyManager): Router {
    */
   router.get('/v1/collateral', requireScope('read:collateral'), (req, res) => {
     // TODO: Proxy to collateral service
-    res.json({ tenantId: req.tenantId, collateral: [] });
+    res.json({ tenantId: req.tenantId || '', collateral: [] });
   });
 
   /**
@@ -259,7 +270,7 @@ export function createApiMarketplaceRouter(keyManager: ApiKeyManager): Router {
   router.get('/v1/tranche', requireScope('read:tranche'), (req, res) => {
     // TODO: Proxy to vault layer
     res.json({
-      tenantId: req.tenantId,
+      tenantId: req.tenantId || '',
       navSentinel: 0,
       navCatalyst: 0,
       juniorRatio: 0,
@@ -273,7 +284,7 @@ export function createApiMarketplaceRouter(keyManager: ApiKeyManager): Router {
    */
   router.get('/v1/analytics/:category', requireScope('read:analytics'), (req, res) => {
     // TODO: Proxy to analytics engine
-    res.json({ tenantId: req.tenantId, category: req.params.category, data: [] });
+    res.json({ tenantId: req.tenantId || '', category: req.params.category, data: [] });
   });
 
   /**
@@ -281,7 +292,7 @@ export function createApiMarketplaceRouter(keyManager: ApiKeyManager): Router {
    */
   router.post('/v1/evidence', requireScope('write:evidence'), (req, res) => {
     // TODO: Proxy to evidence ingestion service
-    res.status(201).json({ tenantId: req.tenantId, evidenceId: 'pending' });
+    res.status(201).json({ tenantId: req.tenantId || '', evidenceId: 'pending' });
   });
 
   /**
@@ -290,7 +301,7 @@ export function createApiMarketplaceRouter(keyManager: ApiKeyManager): Router {
   router.get('/v1/reserves', requireScope('read:reserves'), (req, res) => {
     // TODO: Proxy to reserve engine
     res.json({
-      tenantId: req.tenantId,
+      tenantId: req.tenantId || '',
       reserveBalance: 0,
       reserveShortfall: 0,
       reserveCoverageRatio: 0,
@@ -303,7 +314,7 @@ export function createApiMarketplaceRouter(keyManager: ApiKeyManager): Router {
   router.post('/v1/webhooks', requireScope('write:webhooks'), (req, res) => {
     // TODO: Register webhook for event notifications
     res.status(201).json({
-      tenantId: req.tenantId,
+      tenantId: req.tenantId || '',
       webhookId: `wh_${Date.now()}`,
       url: req.body.url,
       events: req.body.events,
@@ -316,7 +327,7 @@ export function createApiMarketplaceRouter(keyManager: ApiKeyManager): Router {
   router.post('/v1/api-keys', requireScope('admin:api_keys'), (req, res) => {
     try {
       const key = keyManager.generateKey(
-        req.tenantId,
+        req.tenantId || '',
         req.body.tier,
         req.body.scopes
       );
@@ -327,7 +338,7 @@ export function createApiMarketplaceRouter(keyManager: ApiKeyManager): Router {
   });
 
   router.get('/v1/api-keys', requireScope('admin:api_keys'), (req, res) => {
-    const keys = keyManager.getTenantKeys(req.tenantId);
+    const keys = keyManager.getTenantKeys(req.tenantId || '');
     res.json(keys.map(k => ({
       keyId: k.keyId,
       tier: k.tier,

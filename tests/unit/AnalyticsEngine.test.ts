@@ -18,10 +18,10 @@ describe('Analytics Engine', () => {
     it('generates a complete dashboard summary with all 8 categories', async () => {
       // Seed some events
       await eventStore.append({
-        eventId: '',
-        timestamp: '',
-        previousEventHash: '',
-        eventType: 'CAPITAL_REQUEST_CREATED' as EventType,
+        
+        
+        
+        eventType: EventType.CAPITAL_REQUEST_CREATED,
         actorId: 'test',
         actorRole: 'test',
         tenantId: 'tenant_1',
@@ -31,10 +31,10 @@ describe('Analytics Engine', () => {
       });
 
       await eventStore.append({
-        eventId: '',
-        timestamp: '',
-        previousEventHash: '',
-        eventType: 'CAPITAL_REQUEST_APPROVED' as EventType,
+        
+        
+        
+        eventType: EventType.CAPITAL_REQUEST_APPROVED,
         actorId: 'test',
         actorRole: 'approver',
         tenantId: 'tenant_1',
@@ -44,10 +44,10 @@ describe('Analytics Engine', () => {
       });
 
       await eventStore.append({
-        eventId: '',
-        timestamp: '',
-        previousEventHash: '',
-        eventType: 'COVENANT_BREACHED' as EventType,
+        
+        
+        
+        eventType: EventType.COVENANT_BREACHED,
         actorId: 'system',
         actorRole: 'system',
         tenantId: 'tenant_1',
@@ -73,20 +73,20 @@ describe('Analytics Engine', () => {
   describe('Capital Flow Analytics', () => {
     it('calculates approval rate from events', async () => {
       await eventStore.append({
-        eventId: '', timestamp: '', previousEventHash: '',
-        eventType: 'CAPITAL_REQUEST_CREATED' as EventType,
+          
+        eventType: EventType.CAPITAL_REQUEST_CREATED,
         actorId: 'test', actorRole: 'test', tenantId: 'tenant_1',
         payloadHash: '0x0', policyVersion: 'v1', metadata: { requestId: 'r1' },
       });
       await eventStore.append({
-        eventId: '', timestamp: '', previousEventHash: '',
-        eventType: 'CAPITAL_REQUEST_APPROVED' as EventType,
+          
+        eventType: EventType.CAPITAL_REQUEST_APPROVED,
         actorId: 'test', actorRole: 'approver', tenantId: 'tenant_1',
         payloadHash: '0x1', policyVersion: 'v1', metadata: { requestId: 'r1' },
       });
       await eventStore.append({
-        eventId: '', timestamp: '', previousEventHash: '',
-        eventType: 'CAPITAL_REQUEST_HELD' as EventType,
+          
+        eventType: EventType.CAPITAL_REQUEST_HELD,
         actorId: 'test', actorRole: 'approver', tenantId: 'tenant_1',
         payloadHash: '0x2', policyVersion: 'v1', metadata: { requestId: 'r2', holdReason: 'MISSING_EVIDENCE' },
       });
@@ -104,8 +104,8 @@ describe('Analytics Engine', () => {
     it('counts breaches and calculates breach frequency', async () => {
       for (let i = 0; i < 3; i++) {
         await eventStore.append({
-          eventId: '', timestamp: '', previousEventHash: '',
-          eventType: 'COVENANT_BREACHED' as EventType,
+            
+          eventType: EventType.COVENANT_BREACHED,
           actorId: 'system', actorRole: 'system', tenantId: 'tenant_1',
           payloadHash: `0x${i}`, policyVersion: 'v1',
           metadata: { covenantId: `cov_${i % 2}`, measuredValue: 0.80, threshold: 0.75 },
@@ -122,8 +122,8 @@ describe('Analytics Engine', () => {
   describe('Tranche Analytics', () => {
     it('counts capital preservation mode triggers', async () => {
       await eventStore.append({
-        eventId: '', timestamp: '', previousEventHash: '',
-        eventType: 'CAPITAL_PRESERVATION_TRIGGERED' as EventType,
+          
+        eventType: EventType.CAPITAL_PRESERVATION_TRIGGERED,
         actorId: 'system', actorRole: 'system', tenantId: 'tenant_1',
         payloadHash: '0x0', policyVersion: 'v1', metadata: { juniorRatio: 0.18, minJuniorRatio: 0.20 },
       });
