@@ -1,0 +1,69 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-dibs-950 text-dibs-100 font-sans antialiased;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-lg border border-dibs-800 bg-dibs-900 p-6 shadow-lg;
+  }
+  .card-header {
+    @apply mb-4 flex items-center justify-between border-b border-dibs-800 pb-3;
+  }
+  .card-title {
+    @apply text-lg font-semibold text-dibs-100;
+  }
+  .stat-value {
+    @apply text-3xl font-bold text-foreground;
+  }
+  .stat-label {
+    @apply text-sm text-dibs-300;
+  }
+  .badge {
+    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+  .badge-green {
+    @apply bg-emerald-900/40 text-emerald-400 ring-1 ring-emerald-700/50;
+  }
+  .badge-yellow {
+    @apply bg-amber-900/40 text-amber-400 ring-1 ring-amber-700/50;
+  }
+  .badge-red {
+    @apply bg-red-900/40 text-red-400 ring-1 ring-red-700/50;
+  }
+  .badge-blue {
+    @apply bg-blue-900/40 text-blue-400 ring-1 ring-blue-700/50;
+  }
+  .nav-link {
+    @apply flex items-center gap-3 rounded-md px-3 py-2 text-sm text-dibs-300 transition-colors hover:bg-dibs-800 hover:text-dibs-100;
+  }
+  .nav-link-active {
+    @apply bg-dibs-800 text-dibs-100;
+  }
+  .btn-primary {
+    @apply rounded-md bg-dibs-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-dibs-500;
+  }
+  .btn-secondary {
+    @apply rounded-md border border-dibs-700 px-4 py-2 text-sm font-medium text-dibs-200 transition-colors hover:bg-dibs-800;
+  }
+  .input {
+    @apply rounded-md border border-dibs-700 bg-dibs-900 px-3 py-2 text-sm text-dibs-100 placeholder-dibs-400 focus:border-dibs-500 focus:outline-none focus:ring-1 focus:ring-dibs-500;
+  }
+  .table {
+    @apply w-full text-left text-sm;
+  }
+  .table thead th {
+    @apply border-b border-dibs-800 pb-2 text-xs font-medium uppercase tracking-wider text-dibs-400;
+  }
+  .table tbody tr {
+    @apply border-b border-dibs-800/50 hover:bg-dibs-800/30;
+  }
+  .table td {
+    @apply py-3 pr-4;
+  }
+}
