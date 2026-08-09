@@ -114,6 +114,13 @@ contract DIBSVault is ERC4626 {
         // TODO: Emit immutable unpause event, require post-incident review
     }
 
+    /**
+     * @dev Set emergency role (admin only).
+     */
+    function assignEmergencyRole(address role) external onlyAdmin {
+        emergencyRole = role;
+    }
+
     // TODO: Capital Preservation Mode
     // - Trigger when JuniorRatio < MinJuniorRatio
     // - Queue, cap, or pause Sentinel withdrawals

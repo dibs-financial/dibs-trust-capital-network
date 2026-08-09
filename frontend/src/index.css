@@ -19,7 +19,7 @@
     @apply text-lg font-semibold text-dibs-100;
   }
   .stat-value {
-    @apply text-3xl font-bold text-foreground;
+    @apply text-3xl font-bold text-dibs-100;
   }
   .stat-label {
     @apply text-sm text-dibs-300;

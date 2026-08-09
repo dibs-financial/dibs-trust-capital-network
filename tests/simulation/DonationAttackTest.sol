@@ -42,6 +42,7 @@ contract DonationAttackTest is Test {
         asset.mint(address(this), 1e24);
         asset.mint(address(0x1), 1e24);
         asset.mint(address(0x2), 1e24);
+        asset.mint(address(0x3), 1e24);
     }
 
     /**
@@ -73,14 +74,26 @@ contract DonationAttackTest is Test {
     }
 
     /**
-     * Test: Minimum shares out enforcement prevents dust deposits.
+     * Test: Minimum shares out enforcement prevents dust deposits after donation inflates exchange rate.
+     * With virtual offset of 6, a 1-wei deposit into an empty vault produces 1e6 shares (above MIN).
+     * But after a large donation skews the exchange rate, a 1-wei deposit produces ~0 shares,
+     * which is below MIN_SHARES_OUT (1e3) and should revert.
      */
     function test_MinSharesOut_RevertsOnDustDeposit() public {
-        address user = address(0x1);
+        // First depositor establishes a position
+        address first = address(0x1);
+        vm.startPrank(first);
+        asset.approve(address(vault), type(uint256).max);
+        vault.deposit(1e6, first);
+        vm.stopPrank();
+
+        // Donate large amount to inflate exchange rate
+        asset.transfer(address(vault), 1e22);
+
+        // Now a 1-wei deposit should produce shares below MIN_SHARES_OUT
+        address user = address(0x2);
         vm.startPrank(user);
         asset.approve(address(vault), type(uint256).max);
-
-        // Dust deposit should revert
         vm.expectRevert("DIBS: shares below minimum");
         vault.deposit(1, user);
         vm.stopPrank();
@@ -111,14 +124,14 @@ contract DonationAttackTest is Test {
     function test_EmergencyPause_BlocksDeposits() public {
         address emergencyRole = address(0x3);
 
-        // Set emergency role (TODO: implement proper role assignment)
-        // vault.setEmergencyRole(emergencyRole);
+        // Admin sets emergency role
+        vault.assignEmergencyRole(emergencyRole);
 
-        // Pause
+        // Emergency role pauses
         vm.prank(emergencyRole);
-        // vault.emergencyPause();
+        vault.emergencyPause();
 
-        // Deposit should revert
+        // Deposit should revert when paused
         address user = address(0x1);
         vm.startPrank(user);
         asset.approve(address(vault), type(uint256).max);
