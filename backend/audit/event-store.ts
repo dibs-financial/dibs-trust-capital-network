@@ -1,10 +1,11 @@
 /**
  * DIBS Track A — AuditEvent store
  *
- * Replaces JSON.stringify(event).length "hash".
- * Spec: docs/architecture/DIBS-Domain-State-Event-Model.md §3
+ * Replaces JSON.stringify(event).length hash.
+ * Spec: docs/architecture/DIBS-Domain-State-Event-Model.md section 3
  *
  * Append-only. Corrections are new events. No UPDATE/DELETE.
+ * No template literals — GitHub web editor corrupts dollar-brace.
  */
 
 import { createHash, randomUUID } from 'crypto';
@@ -76,12 +77,10 @@ export enum EventType {
   WEBHOOK_REJECTED = 'WEBHOOK_REJECTED',
   CSV_BATCH_IMPORTED = 'CSV_BATCH_IMPORTED',
 
-  // Kept so existing settlement-service.ts compiles. Prefer DRAW_SETTLEMENT_*.
   SETTLEMENT_INSTRUCTION_SENT = 'DRAW_SETTLEMENT_INSTRUCTED',
   SETTLEMENT_CONFIRMED = 'DRAW_SETTLEMENT_CONFIRMED',
   SETTLEMENT_EXCEPTION = 'DRAW_SETTLEMENT_FAILED',
 
-  // Kept so existing callers compile. Do not emit for Autopilot draws.
   CAPITAL_REQUEST_CREATED = 'DRAW_CREATED',
   CAPITAL_REQUEST_APPROVED = 'DRAW_APPROVED',
   CAPITAL_REQUEST_HELD = 'DRAW_HELD',
@@ -121,11 +120,19 @@ export function canonicalJson(value: unknown): string {
     return JSON.stringify(value);
   }
   if (Array.isArray(value)) {
-    return `[${value.map(canonicalJson).join(',')}]`;
+    return '[' + value.map(canonicalJson).join(',') + ']';
   }
   const obj = value as Record<string, unknown>;
   const keys = Object.keys(obj).sort();
-  return `{\( {keys.map((k) => ` \){JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(',')}}`;
+  return (
+    '{' +
+    keys
+      .map(function (k) {
+        return JSON.stringify(k) + ':' + canonicalJson(obj[k]);
+      })
+      .join(',') +
+    '}'
+  );
 }
 
 export function sha256Hex(input: string): string {
@@ -136,7 +143,6 @@ export function hashPayload(payload: unknown): string {
   return sha256Hex(canonicalJson(payload));
 }
 
-/** Envelope listed in the domain file §3.2. eventHash is excluded from its own input. */
 export function hashEventEnvelope(fields: {
   eventId: string;
   eventType: string;
@@ -198,6 +204,18 @@ export type AppendInput = {
   metadata?: Record<string, unknown>;
 };
 
+function idempotencyLookup(tenantId: string, key: string, eventType: string): string {
+  return [tenantId, key, eventType].join(':');
+}
+
+function chainLookup(
+  tenantId: string,
+  aggregateType: string | undefined,
+  aggregateId: string | undefined
+): string {
+  return [tenantId, aggregateType || 'TENANT', aggregateId || tenantId].join(':');
+}
+
 export class EventStore {
   private readonly events: AuditEvent[] = [];
   private readonly byIdempotency = new Map<string, AuditEvent>();
@@ -207,43 +225,43 @@ export class EventStore {
     const tenantId = input.tenantId;
     if (!tenantId) throw new Error('TENANT_REQUIRED');
 
-    const payload = input.payload ?? input.metadata ?? {};
+    const payload = input.payload || input.metadata || {};
     const payloadHash =
       input.payloadHash && input.payloadHash.length > 0
         ? input.payloadHash
         : hashPayload(payload);
 
-    const idempotencyKey = input.idempotencyKey ?? '';
+    const idempotencyKey = input.idempotencyKey || '';
     if (idempotencyKey) {
       const existing = this.byIdempotency.get(
-        `\( {tenantId}: \){idempotencyKey}:${String(input.eventType)}`
+        idempotencyLookup(tenantId, idempotencyKey, String(input.eventType))
       );
       if (existing) return existing;
     }
 
     const eventId = randomUUID();
     const occurredAt = new Date().toISOString();
-    const chainKey = `\( {tenantId}: \){input.aggregateType ?? 'TENANT'}:${input.aggregateId ?? tenantId}`;
-    const previousEventHash = this.lastHashByChain.get(chainKey) ?? '0'.repeat(64);
+    const chainKey = chainLookup(tenantId, input.aggregateType, input.aggregateId);
+    const previousEventHash = this.lastHashByChain.get(chainKey) || '0'.repeat(64);
 
     const envelope = {
-      eventId,
+      eventId: eventId,
       eventType: String(input.eventType),
       eventVersion: 1,
-      occurredAt,
-      tenantId,
-      actorType: input.actorType ?? inferActorType(input.actorRole),
+      occurredAt: occurredAt,
+      tenantId: tenantId,
+      actorType: input.actorType || inferActorType(input.actorRole),
       actorId: input.actorId,
       actorRole: input.actorRole,
-      aggregateType: input.aggregateType ?? 'DRAW_REQUEST',
-      aggregateId: input.aggregateId ?? '',
-      stateBefore: input.stateBefore ?? null,
-      stateAfter: input.stateAfter ?? null,
-      payloadHash,
-      evidenceManifestHash: input.evidenceManifestHash ?? '',
-      policyVersion: input.policyVersion ?? '',
-      previousEventHash,
-      idempotencyKey,
+      aggregateType: input.aggregateType || 'DRAW_REQUEST',
+      aggregateId: input.aggregateId || '',
+      stateBefore: input.stateBefore == null ? null : input.stateBefore,
+      stateAfter: input.stateAfter == null ? null : input.stateAfter,
+      payloadHash: payloadHash,
+      evidenceManifestHash: input.evidenceManifestHash || '',
+      policyVersion: input.policyVersion || '',
+      previousEventHash: previousEventHash,
+      idempotencyKey: idempotencyKey,
     };
 
     const eventHash = hashEventEnvelope(envelope);
@@ -251,16 +269,16 @@ export class EventStore {
     const event: AuditEvent = {
       ...envelope,
       recordedAt: occurredAt,
-      payload,
-      eventHash,
-      correlationId: input.correlationId ?? input.aggregateId ?? eventId,
+      payload: payload,
+      eventHash: eventHash,
+      correlationId: input.correlationId || input.aggregateId || eventId,
     };
 
     this.events.push(event);
     this.lastHashByChain.set(chainKey, eventHash);
     if (idempotencyKey) {
       this.byIdempotency.set(
-        `\( {tenantId}: \){idempotencyKey}:${String(input.eventType)}`
+        idempotencyLookup(tenantId, idempotencyKey, String(input.eventType)),
         event
       );
     }
@@ -268,7 +286,9 @@ export class EventStore {
   }
 
   async getByTenant(tenantId: string, skip = 0, limit = 100): Promise<AuditEvent[]> {
-    return this.events.filter((e) => e.tenantId === tenantId).slice(skip, skip + limit);
+    return this.events.filter(function (e) {
+      return e.tenantId === tenantId;
+    }).slice(skip, skip + limit);
   }
 
   async getByAggregate(
@@ -276,17 +296,19 @@ export class EventStore {
     aggregateType: string,
     aggregateId: string
   ): Promise<AuditEvent[]> {
-    return this.events.filter(
-      (e) =>
+    return this.events.filter(function (e) {
+      return (
         e.tenantId === tenantId &&
         e.aggregateType === aggregateType &&
         e.aggregateId === aggregateId
-    );
+      );
+    });
   }
 
   verifyChain(events: AuditEvent[]): { ok: boolean; brokenAt?: string } {
     let prev = '0'.repeat(64);
-    for (const e of events) {
+    for (let i = 0; i < events.length; i++) {
+      const e = events[i];
       if (e.previousEventHash !== prev) return { ok: false, brokenAt: e.eventId };
       const recomputed = hashEventEnvelope({
         eventId: e.eventId,
