@@ -1,125 +1,322 @@
 /**
- * DIBS Backend — Immutable Event Model
+ * DIBS Track A — AuditEvent store
  *
- * Every capital-state change requires an immutable audit event.
- * No silent data synchronization. No capital-state change without an immutable audit event.
+ * Replaces JSON.stringify(event).length "hash".
+ * Spec: docs/architecture/DIBS-Domain-State-Event-Model.md §3
  *
- * Event Record:
- * - Immutable event ID
- * - Timestamped transition
- * - Hash-linked evidence objects
- * - Versioned policy logic
- * - Versioned calculation inputs
- * - Versioned risk parameters
- * - Reconciliation records
- * - External settlement confirmations
- * - Data-source provenance
- * - Role and authorization history
+ * Append-only. Corrections are new events. No UPDATE/DELETE.
  */
 
-export interface ImmutableEvent {
-  eventId: string;           // Immutable, never reused
-  timestamp: string;         // ISO-8601 UTC
-  eventType: EventType;
-  actorId: string;           // Who triggered the event
-  actorRole: string;         // Authorization role
-  tenantId: string;          // Tenant isolation
-  payloadHash: string;       // Hash of event payload
-  previousEventHash: string; // Hash-linked chain
-  policyVersion: string;     // Applicable policy version
-  metadata: Record<string, unknown>;
-}
+import { createHash, randomUUID } from 'crypto';
+
+export type ActorType = 'USER' | 'SYSTEM' | 'PARTNER' | 'SUPER_AGENT';
+
+export type AggregateType =
+  | 'DRAW_REQUEST'
+  | 'DEAL'
+  | 'SPV'
+  | 'COVENANT'
+  | 'PAYEE_BANK_ACCOUNT'
+  | 'HOLD'
+  | 'WAIVER'
+  | 'SETTLEMENT_INSTRUCTION'
+  | 'SETTLEMENT_CONFIRMATION'
+  | 'RECONCILIATION_RECORD'
+  | 'POLICY_VERSION'
+  | 'ROLE_ASSIGNMENT';
 
 export enum EventType {
-  // Capital authorization events
-  CAPITAL_REQUEST_CREATED = 'CAPITAL_REQUEST_CREATED',
-  CAPITAL_REQUEST_APPROVED = 'CAPITAL_REQUEST_APPROVED',
-  CAPITAL_REQUEST_HELD = 'CAPITAL_REQUEST_HELD',
-  CAPITAL_REQUEST_REJECTED = 'CAPITAL_REQUEST_REJECTED',
-  CAPITAL_REQUEST_ESCALATED = 'CAPITAL_REQUEST_ESCALATED',
+  DRAW_CREATED = 'DRAW_CREATED',
+  DRAW_SUBMITTED = 'DRAW_SUBMITTED',
+  DRAW_MANIFEST_FROZEN = 'DRAW_MANIFEST_FROZEN',
+  DRAW_POLICY_EVALUATED = 'DRAW_POLICY_EVALUATED',
+  DRAW_REQUIRES_INFORMATION = 'DRAW_REQUIRES_INFORMATION',
+  DRAW_HELD = 'DRAW_HELD',
+  DRAW_HOLD_RELEASED = 'DRAW_HOLD_RELEASED',
+  DRAW_ESCALATED = 'DRAW_ESCALATED',
+  DRAW_APPROVED = 'DRAW_APPROVED',
+  DRAW_PARTIAL_APPROVED = 'DRAW_PARTIAL_APPROVED',
+  DRAW_BINDING_BROKEN = 'DRAW_BINDING_BROKEN',
+  DRAW_REJECTED = 'DRAW_REJECTED',
+  DRAW_CANCELLED = 'DRAW_CANCELLED',
+  DRAW_EXPIRED = 'DRAW_EXPIRED',
+  DRAW_SETTLEMENT_INSTRUCTED = 'DRAW_SETTLEMENT_INSTRUCTED',
+  DRAW_SETTLEMENT_CONFIRMED = 'DRAW_SETTLEMENT_CONFIRMED',
+  DRAW_SETTLEMENT_FAILED = 'DRAW_SETTLEMENT_FAILED',
+  DRAW_RECONCILIATION_MATCHED = 'DRAW_RECONCILIATION_MATCHED',
+  DRAW_RECONCILIATION_BREAK = 'DRAW_RECONCILIATION_BREAK',
+  DRAW_RECONCILED = 'DRAW_RECONCILED',
+  DRAW_CLOSED = 'DRAW_CLOSED',
 
-  // Evidence events
-  EVIDENCE_SUBMITTED = 'EVIDENCE_SUBMITTED',
-  EVIDENCE_VALIDATED = 'EVIDENCE_VALIDATED',
-  EVIDENCE_FLAGGED = 'EVIDENCE_FLAGGED',
-  EVIDENCE_EXPIRED = 'EVIDENCE_EXPIRED',
+  EVIDENCE_UPLOADED = 'EVIDENCE_UPLOADED',
+  EVIDENCE_SUPERSEDED = 'EVIDENCE_SUPERSEDED',
+  EVIDENCE_VERIFIED = 'EVIDENCE_VERIFIED',
 
-  // Release events
-  RELEASE_AUTHORIZED = 'RELEASE_AUTHORIZED',
-  RELEASE_HOLD = 'RELEASE_HOLD',
-  RELEASE_REJECTED = 'RELEASE_REJECTED',
-  SETTLEMENT_INSTRUCTION_SENT = 'SETTLEMENT_INSTRUCTION_SENT',
-  SETTLEMENT_CONFIRMED = 'SETTLEMENT_CONFIRMED',
-  SETTLEMENT_EXCEPTION = 'SETTLEMENT_EXCEPTION',
+  PAYEE_ACCOUNT_VERIFIED = 'PAYEE_ACCOUNT_VERIFIED',
+  PAYEE_ACCOUNT_CHANGED = 'PAYEE_ACCOUNT_CHANGED',
 
-  // Covenant events
-  COVENANT_COMPLIANT = 'COVENANT_COMPLIANT',
-  COVENANT_WARNING = 'COVENANT_WARNING',
+  HOLD_PLACED = 'HOLD_PLACED',
+  HOLD_RELEASED = 'HOLD_RELEASED',
+
+  WAIVER_REQUESTED = 'WAIVER_REQUESTED',
+  WAIVER_APPROVED = 'WAIVER_APPROVED',
+  WAIVER_EXPIRED = 'WAIVER_EXPIRED',
+  WAIVER_REVOKED = 'WAIVER_REVOKED',
+
+  COVENANT_MEASURED = 'COVENANT_MEASURED',
+  COVENANT_WATCH = 'COVENANT_WATCH',
   COVENANT_BREACHED = 'COVENANT_BREACHED',
-  COVENANT_CURE_ENTERED = 'COVENANT_CURE_ENTERED',
-  COVENANT_WAIVED = 'COVENANT_WAIVED',
-  COVENANT_DEFAULT = 'COVENANT_DEFAULT',
+  COVENANT_CURED = 'COVENANT_CURED',
 
-  // Collateral events
-  COLLATERAL_FLAGGED = 'COLLATERAL_FLAGGED',
-  COLLATERAL_REINSPECT_REQUIRED = 'COLLATERAL_REINSPECT_REQUIRED',
+  APPROVAL_RECORDED = 'APPROVAL_RECORDED',
+  ROLE_ASSIGNED = 'ROLE_ASSIGNED',
+  ROLE_REVOKED = 'ROLE_REVOKED',
 
-  // Tranche events
-  CAPITAL_PRESERVATION_TRIGGERED = 'CAPITAL_PRESERVATION_TRIGGERED',
-  CAPITAL_PRESERVATION_LIFTED = 'CAPITAL_PRESERVATION_LIFTED',
-  RESERVE_RELEASED = 'RESERVE_RELEASED',
-  DISTRIBUTION_SUSPENDED = 'DISTRIBUTION_SUSPENDED',
-  RECAPITALIZATION_EXECUTED = 'RECAPITALIZATION_EXECUTED',
+  WEBHOOK_RECEIVED = 'WEBHOOK_RECEIVED',
+  WEBHOOK_REJECTED = 'WEBHOOK_REJECTED',
+  CSV_BATCH_IMPORTED = 'CSV_BATCH_IMPORTED',
 
-  // Authorization events
-  AUTHORIZATION_REVOKED = 'AUTHORIZATION_REVOKED',
-  AUTHORIZATION_EXPIRED = 'AUTHORIZATION_EXPIRED',
+  // Kept so existing settlement-service.ts compiles. Prefer DRAW_SETTLEMENT_*.
+  SETTLEMENT_INSTRUCTION_SENT = 'DRAW_SETTLEMENT_INSTRUCTED',
+  SETTLEMENT_CONFIRMED = 'DRAW_SETTLEMENT_CONFIRMED',
+  SETTLEMENT_EXCEPTION = 'DRAW_SETTLEMENT_FAILED',
 
-  // Emergency events
-  EMERGENCY_PAUSE = 'EMERGENCY_PAUSE',
-  EMERGENCY_UNPAUSE = 'EMERGENCY_UNPAUSE',
+  // Kept so existing callers compile. Do not emit for Autopilot draws.
+  CAPITAL_REQUEST_CREATED = 'DRAW_CREATED',
+  CAPITAL_REQUEST_APPROVED = 'DRAW_APPROVED',
+  CAPITAL_REQUEST_HELD = 'DRAW_HELD',
+  CAPITAL_REQUEST_REJECTED = 'DRAW_REJECTED',
+  CAPITAL_REQUEST_ESCALATED = 'DRAW_ESCALATED',
 }
 
-/**
- * Append-only event store. Events are never mutated or deleted.
- * Each event is hash-linked to the previous event, creating a tamper-evident chain.
- */
+export interface AuditEvent {
+  eventId: string;
+  eventType: EventType | string;
+  eventVersion: number;
+  occurredAt: string;
+  recordedAt: string;
+  tenantId: string;
+  actorType: ActorType;
+  actorId: string;
+  actorRole: string;
+  aggregateType: AggregateType | string;
+  aggregateId: string;
+  stateBefore: string | null;
+  stateAfter: string | null;
+  policyVersion: string;
+  evidenceManifestHash: string;
+  payload: Record<string, unknown>;
+  payloadHash: string;
+  previousEventHash: string;
+  eventHash: string;
+  idempotencyKey: string;
+  correlationId: string;
+}
+
+/** @deprecated Use AuditEvent */
+export type ImmutableEvent = AuditEvent;
+
+export function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(',')}]`;
+  }
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{\( {keys.map((k) => ` \){JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(',')}}`;
+}
+
+export function sha256Hex(input: string): string {
+  return createHash('sha256').update(input, 'utf8').digest('hex');
+}
+
+export function hashPayload(payload: unknown): string {
+  return sha256Hex(canonicalJson(payload));
+}
+
+/** Envelope listed in the domain file §3.2. eventHash is excluded from its own input. */
+export function hashEventEnvelope(fields: {
+  eventId: string;
+  eventType: string;
+  eventVersion: number;
+  occurredAt: string;
+  tenantId: string;
+  actorType: string;
+  actorId: string;
+  actorRole: string;
+  aggregateType: string;
+  aggregateId: string;
+  stateBefore: string | null;
+  stateAfter: string | null;
+  payloadHash: string;
+  evidenceManifestHash: string;
+  policyVersion: string;
+  previousEventHash: string;
+  idempotencyKey: string;
+}): string {
+  return sha256Hex(
+    canonicalJson({
+      event_id: fields.eventId,
+      event_type: fields.eventType,
+      event_version: fields.eventVersion,
+      occurred_at: fields.occurredAt,
+      tenant_id: fields.tenantId,
+      actor_type: fields.actorType,
+      actor_id: fields.actorId,
+      actor_role: fields.actorRole,
+      aggregate_type: fields.aggregateType,
+      aggregate_id: fields.aggregateId,
+      state_before: fields.stateBefore,
+      state_after: fields.stateAfter,
+      payload_hash: fields.payloadHash,
+      evidence_manifest_hash: fields.evidenceManifestHash,
+      policy_version: fields.policyVersion,
+      previous_event_hash: fields.previousEventHash,
+      idempotency_key: fields.idempotencyKey,
+    })
+  );
+}
+
+export type AppendInput = {
+  eventType: EventType | string;
+  tenantId: string;
+  actorId: string;
+  actorRole: string;
+  actorType?: ActorType;
+  aggregateType?: AggregateType | string;
+  aggregateId?: string;
+  stateBefore?: string | null;
+  stateAfter?: string | null;
+  policyVersion?: string;
+  evidenceManifestHash?: string;
+  payload?: Record<string, unknown>;
+  payloadHash?: string;
+  idempotencyKey?: string;
+  correlationId?: string;
+  metadata?: Record<string, unknown>;
+};
+
 export class EventStore {
-  private events: ImmutableEvent[] = [];
+  private readonly events: AuditEvent[] = [];
+  private readonly byIdempotency = new Map<string, AuditEvent>();
+  private readonly lastHashByChain = new Map<string, string>();
 
-  async append(event: Omit<ImmutableEvent, 'eventId' | 'timestamp' | 'previousEventHash'>): Promise<ImmutableEvent> {
-    const eventId = this.generateEventId();
-    const timestamp = new Date().toISOString();
-    const previousEventHash = this.events.length > 0
-      ? this.hashEvent(this.events[this.events.length - 1])
-      : '0x0';
+  async append(input: AppendInput): Promise<AuditEvent> {
+    const tenantId = input.tenantId;
+    if (!tenantId) throw new Error('TENANT_REQUIRED');
 
-    const fullEvent: ImmutableEvent = {
-      ...event,
+    const payload = input.payload ?? input.metadata ?? {};
+    const payloadHash =
+      input.payloadHash && input.payloadHash.length > 0
+        ? input.payloadHash
+        : hashPayload(payload);
+
+    const idempotencyKey = input.idempotencyKey ?? '';
+    if (idempotencyKey) {
+      const existing = this.byIdempotency.get(
+        `\( {tenantId}: \){idempotencyKey}:${String(input.eventType)}`
+      );
+      if (existing) return existing;
+    }
+
+    const eventId = randomUUID();
+    const occurredAt = new Date().toISOString();
+    const chainKey = `\( {tenantId}: \){input.aggregateType ?? 'TENANT'}:${input.aggregateId ?? tenantId}`;
+    const previousEventHash = this.lastHashByChain.get(chainKey) ?? '0'.repeat(64);
+
+    const envelope = {
       eventId,
-      timestamp,
+      eventType: String(input.eventType),
+      eventVersion: 1,
+      occurredAt,
+      tenantId,
+      actorType: input.actorType ?? inferActorType(input.actorRole),
+      actorId: input.actorId,
+      actorRole: input.actorRole,
+      aggregateType: input.aggregateType ?? 'DRAW_REQUEST',
+      aggregateId: input.aggregateId ?? '',
+      stateBefore: input.stateBefore ?? null,
+      stateAfter: input.stateAfter ?? null,
+      payloadHash,
+      evidenceManifestHash: input.evidenceManifestHash ?? '',
+      policyVersion: input.policyVersion ?? '',
       previousEventHash,
+      idempotencyKey,
     };
 
-    this.events.push(fullEvent);
-    // TODO: Persist to append-only store (PostgreSQL or dedicated event store)
-    // TODO: Index for query by tenant, type, actor, timestamp
-    return fullEvent;
+    const eventHash = hashEventEnvelope(envelope);
+
+    const event: AuditEvent = {
+      ...envelope,
+      recordedAt: occurredAt,
+      payload,
+      eventHash,
+      correlationId: input.correlationId ?? input.aggregateId ?? eventId,
+    };
+
+    this.events.push(event);
+    this.lastHashByChain.set(chainKey, eventHash);
+    if (idempotencyKey) {
+      this.byIdempotency.set(
+        `\( {tenantId}: \){idempotencyKey}:${String(input.eventType)}`,
+        event
+      );
+    }
+    return event;
   }
 
-  async getByTenant(tenantId: string, skip = 0, limit = 100): Promise<ImmutableEvent[]> {
-    return this.events
-      .filter(e => e.tenantId === tenantId)
-      .slice(skip, skip + limit);
+  async getByTenant(tenantId: string, skip = 0, limit = 100): Promise<AuditEvent[]> {
+    return this.events.filter((e) => e.tenantId === tenantId).slice(skip, skip + limit);
   }
 
-  private generateEventId(): string {
-    // TODO: UUIDv7 or ULID for sortable unique IDs
-    return `evt_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  async getByAggregate(
+    tenantId: string,
+    aggregateType: string,
+    aggregateId: string
+  ): Promise<AuditEvent[]> {
+    return this.events.filter(
+      (e) =>
+        e.tenantId === tenantId &&
+        e.aggregateType === aggregateType &&
+        e.aggregateId === aggregateId
+    );
   }
 
-  private hashEvent(event: ImmutableEvent): string {
-    // TODO: Use proper cryptographic hash (SHA-256)
-    return JSON.stringify(event).length.toString(16);
+  verifyChain(events: AuditEvent[]): { ok: boolean; brokenAt?: string } {
+    let prev = '0'.repeat(64);
+    for (const e of events) {
+      if (e.previousEventHash !== prev) return { ok: false, brokenAt: e.eventId };
+      const recomputed = hashEventEnvelope({
+        eventId: e.eventId,
+        eventType: String(e.eventType),
+        eventVersion: e.eventVersion,
+        occurredAt: e.occurredAt,
+        tenantId: e.tenantId,
+        actorType: e.actorType,
+        actorId: e.actorId,
+        actorRole: e.actorRole,
+        aggregateType: String(e.aggregateType),
+        aggregateId: e.aggregateId,
+        stateBefore: e.stateBefore,
+        stateAfter: e.stateAfter,
+        payloadHash: e.payloadHash,
+        evidenceManifestHash: e.evidenceManifestHash,
+        policyVersion: e.policyVersion,
+        previousEventHash: e.previousEventHash,
+        idempotencyKey: e.idempotencyKey,
+      });
+      if (recomputed !== e.eventHash) return { ok: false, brokenAt: e.eventId };
+      prev = e.eventHash;
+    }
+    return { ok: true };
   }
+}
+
+function inferActorType(role: string): ActorType {
+  if (role === 'system') return 'SYSTEM';
+  if (role === 'EscrowPartner' || role === 'partner') return 'PARTNER';
+  if (role === 'SuperAgent') return 'SUPER_AGENT';
+  return 'USER';
 }
