@@ -1,5 +1,13 @@
 # DIBS Trust Capital Network
 
+**Product (Track A):** DIBS Capital Autopilot — controlled draws.
+
+Architecture:
+- [Core thesis + MVP](docs/architecture/DIBS-Core-Thesis-MVP.md)
+- [Domain, state, event model](docs/architecture/DIBS-Domain-State-Event-Model.md)
+- [Technical architecture](docs/architecture/DIBS-Technical-Architecture.md)
+- [Implementation plan](docs/architecture/DIBS-Implementation-Plan.md)
+
 **Decentralized Infinite Banking System** — Enterprise controlled-capital infrastructure operated by Cornerstone Creative Capital LLC (parent: H.E.R.I.&A. HOLDINGS LLC).
 
 Evidence-gated draw approval, covenant monitoring, ERC-4626 structured-credit tranches (Sentinel/Catalyst), Capital Preservation Mode, non-redeemable seed liquidity, timelocked parameter governance.
