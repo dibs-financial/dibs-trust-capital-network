@@ -260,7 +260,7 @@ export class EventStore {
     this.lastHashByChain.set(chainKey, eventHash);
     if (idempotencyKey) {
       this.byIdempotency.set(
-        `\( {tenantId}: \){idempotencyKey}:${String(input.eventType)}`,
+        `\( {tenantId}: \){idempotencyKey}:${String(input.eventType)}`
         event
       );
     }
