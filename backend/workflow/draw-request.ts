@@ -5,6 +5,7 @@
  * Spec: docs/architecture/DIBS-Domain-State-Event-Model.md
  *
  * Money is integer minor units. Tenant comes from the session, not this module.
+ * No template literals — GitHub web editor corrupts dollar-brace.
  */
 
 import type { EventStore } from '../audit/event-store';
@@ -186,54 +187,53 @@ export async function transitionDraw(
 ): Promise<DrawRequest> {
   const allowed = ALLOWED_TRANSITIONS[draw.status];
   if (!allowed.includes(target)) {
-    throw new Error(`Invalid transition: ${draw.status} -> ${target}`);
+    throw new Error('Invalid transition: ' + draw.status + ' -> ' + target);
   }
 
   if (target === 'APPROVED') {
-    if (!extras?.approvalContext) {
+    if (!extras || !extras.approvalContext) {
       throw new Error('APPROVED requires approvalContext');
     }
     const failures = approvalFailures(draw, extras.approvalContext);
     if (failures.length > 0) {
-      throw new Error(`Approval blocked: ${failures.join(',')}`);
+      throw new Error('Approval blocked: ' + failures.join(','));
     }
   }
 
   if (target === 'CANCELLED' && draw.status === 'SETTLEMENT_FAILED') {
-    if (extras?.fundsMovedEvidence) {
+    if (extras && extras.fundsMovedEvidence) {
       throw new Error(
         'Cannot cancel after funds-moved evidence; open RECONCILIATION_EXCEPTION'
       );
     }
   }
 
-  if (target === 'CANCELLED' && draw.status === 'APPROVED' && extras?.instructionExists) {
+  if (target === 'CANCELLED' && draw.status === 'APPROVED' && extras && extras.instructionExists) {
     throw new Error('Cannot cancel APPROVED after instruction exists');
   }
 
   const now = new Date().toISOString();
   const eventType = EVENT_FOR_TARGET[target] ?? EventType.DRAW_POLICY_EVALUATED;
+  const idempotencyKey =
+    (extras && extras.idempotencyKey) || [draw.id, draw.status, target].join(':');
+  const correlationId = (extras && extras.correlationId) || draw.id;
+  const payload = (extras && extras.payload) || { status: target };
 
   await eventStore.append({
     tenantId: draw.tenantId,
     aggregateType: 'DRAW_REQUEST',
     aggregateId: draw.id,
-    eventType,
+    eventType: eventType,
     actorType: actor.type,
     actorId: actor.id,
     actorRole: actor.role,
     stateBefore: draw.status,
     stateAfter: target,
-    policyVersion: draw.lockedPolicyVersion ?? '',
-    correlationId: extras?.correlationId ?? draw.id,
-// now
-idempotencyKey: extras?.idempotencyKey ?? `\( {draw.id}: \){draw.status}:${target}`,
-
-// should be
-idempotencyKey: extras?.idempotencyKey ?? `\( {draw.id}: \){draw.status}:${target}`,
-    idempotencyKey: extras?.idempotencyKey ?? `\( {draw.id}: \){draw.status}:${target}`,
-    evidenceManifestHash: draw.lockedEvidenceManifestHash ?? '',
-    payload: extras?.payload ?? { status: target },
+    policyVersion: draw.lockedPolicyVersion || '',
+    correlationId: correlationId,
+    idempotencyKey: idempotencyKey,
+    evidenceManifestHash: draw.lockedEvidenceManifestHash || '',
+    payload: payload,
   });
 
   return {
