@@ -226,6 +226,11 @@ export async function transitionDraw(
     stateAfter: target,
     policyVersion: draw.lockedPolicyVersion ?? '',
     correlationId: extras?.correlationId ?? draw.id,
+// now
+idempotencyKey: extras?.idempotencyKey ?? `\( {draw.id}: \){draw.status}:${target}`,
+
+// should be
+idempotencyKey: extras?.idempotencyKey ?? `\( {draw.id}: \){draw.status}:${target}`,
     idempotencyKey: extras?.idempotencyKey ?? `\( {draw.id}: \){draw.status}:${target}`,
     evidenceManifestHash: draw.lockedEvidenceManifestHash ?? '',
     payload: extras?.payload ?? { status: target },
