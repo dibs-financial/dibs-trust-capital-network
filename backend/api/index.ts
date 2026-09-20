@@ -17,30 +17,10 @@ import {
   approvalFailures,
   transitionDraw,
 } from '../workflow/draw-request';
-One file. Open [backend/api/index.ts](https://github.com/dibs-financial/dibs-trust-capital-network/blob/main/backend/api/index.ts) → pencil → **Select all** → paste this → commit `feat: wire capital API to DrawRequest`.
+return app;
+}
 
-Download if the phone editor is too small:
-
-````typescript
-/**
- * DIBS Backend — Multi-Tenant API Gateway
- * Track A: DrawRequest machine + SHA-256 AuditEvent store.
- */
-
-import express, { Request, Response, NextFunction } from 'express';
-import helmet from 'helmet';
-import cors from 'cors';
-import morgan from 'morgan';
-
-import { EventStore, EventType } from '../audit/event-store';
-
-import {
-  DrawRequest,
-  DrawRequestState,
-  ApprovalContext,
-  approvalFailures,
-  transitionDraw,
-} from '../workflow/draw-request';
+export default createApp();
 
 import { createEvidenceRouter } from '../evidence/evidence.routes';
 import { globalEvidenceService } from '../evidence/evidence-ingestion';
