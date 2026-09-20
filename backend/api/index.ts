@@ -1,3 +1,22 @@
+/**
+ * DIBS Backend — Multi-Tenant API Gateway
+ * Track A: DrawRequest machine + SHA-256 AuditEvent store.
+ */
+
+import express, { Request, Response, NextFunction } from 'express';
+import helmet from 'helmet';
+import cors from 'cors';
+import morgan from 'morgan';
+
+import { EventStore, EventType } from '../audit/event-store';
+
+import {
+  DrawRequest,
+  DrawRequestState,
+  ApprovalContext,
+  approvalFailures,
+  transitionDraw,
+} from '../workflow/draw-request';
 One file. Open [backend/api/index.ts](https://github.com/dibs-financial/dibs-trust-capital-network/blob/main/backend/api/index.ts) → pencil → **Select all** → paste this → commit `feat: wire capital API to DrawRequest`.
 
 Download if the phone editor is too small:
@@ -698,3 +717,5 @@ export function createApp(): express.Application {
 
   return app;
 }
+
+export default createApp();
