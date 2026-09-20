@@ -17,10 +17,6 @@ import {
   approvalFailures,
   transitionDraw,
 } from '../workflow/draw-request';
-return app;
-}
-
-export default createApp();
 
 import { createEvidenceRouter } from '../evidence/evidence.routes';
 import { globalEvidenceService } from '../evidence/evidence-ingestion';
