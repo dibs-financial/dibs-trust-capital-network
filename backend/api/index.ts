@@ -700,6 +700,3 @@ export function createApp(): express.Application {
 }
 
 export default createApp();
-````
-
-After commit, say “recheck.” I will confirm `capital-request` is gone, `DrawRequest` is imported once, and `createApp` is still there.
