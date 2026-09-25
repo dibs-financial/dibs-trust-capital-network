@@ -9,7 +9,8 @@ Research harness for the DIBS Quantum Optimization Lab. It is a scenario engine,
 | Folder | Status |
 | :-- | :-- |
 | `qubo/` | QUBO compiler, `draw-window/v1`: `FrozenScenario + PenaltyPolicy → (Q, symbol table, compile report)` |
-| `classical/`, `qaoa/`, `validators/`, `experiments/` | Not started |
+| `validators/` | Independent validator, `validator/v1`: `qubo_artifact + bitstring + frozen book → signed ValidationReport` |
+| `classical/`, `qaoa/`, `experiments/` | Not started |
 
 Specs: [`docs/quantum-lab/`](../../docs/quantum-lab/). Tests: `npx jest tests/quantum-lab`.
 
@@ -23,3 +24,15 @@ Specs: [`docs/quantum-lab/`](../../docs/quantum-lab/). Tests: `npx jest tests/qu
 - Penalty floor $P_c > \Delta E_{\max}/v_{\min}^2$, with $\Delta E_{\max}$ bounded conservatively by $\sum$ of absolute objective coefficients.
 
 Not in v1, and refused with `REQUIRES_REMODELING` if requested: reserve bands, SPV allocation $y_s$, and anything above degree 2.
+
+## `validators/` — what v1 checks
+
+The validator binds the artifact, freeze and bitstring and refuses to decode on any mismatch (`REQUIRES_REMODELING`). It then:
+
+- decodes the bitstring, drops slack ancillas and rebuilds the schedule
+- re-applies the pre-filter to every draw that got a bit
+- replays the book in integer minor units (BigInt) and runs: budget, liquidity, reserve (confirmed draws only), LTV in bps, concentration caps, tranche order, payee, hold and settlement route
+- runs the declared stress set: inspection slip, confirmation lag, inflow delay, collateral haircut, extra hold on the largest SPV
+- signs the report with Ed25519
+
+It never uses Q energy as a predicate. It takes a **frozen book**: the compiler's `FrozenScenario` plus the data the compiler never sees (draw eligibility facts, SPV collateral, cash ladder, concentration caps, stresses).

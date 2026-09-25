@@ -123,6 +123,8 @@ export interface QuboArtifact {
   kind: 'DIBS_QLAB_QUBO_ARTIFACT';
   qubo_artifact_id: string;
   scenario_id: string;
+  /** Content hash of the normalized FrozenScenario (see scenario.ts). */
+  scenario_hash: string;
   policy_version_frozen: string;
   manifest_hash_frozen: string;
   encoding_version: string;
@@ -131,6 +133,8 @@ export interface QuboArtifact {
   spin_map: 'z=1-2x';
   n: number;
   symbol_table: SymbolEntry[];
+  /** canonicalHash(symbol_table); the validator refuses to decode if it does not match. */
+  symbol_table_hash: string;
   /** E(x) = Σ diag[i]·x_i + Σ_{i<j} 2·Q_ij·x_i·x_j + E0, in integer cost units. */
   Q: { diag: number[]; offdiag: SymEntry[] };
   E0: number;

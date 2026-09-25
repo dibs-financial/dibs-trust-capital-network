@@ -4,7 +4,7 @@ The Quantum Optimization Lab is a **scenario engine, not a capital engine**. It 
 
 Full memo: [DIBS-Quantum-Lab-Optimization-Exploration.md](./DIBS-Quantum-Lab-Optimization-Exploration.md)
 
-Compiler mechanics: [DIBS-QUBO-Compiler-Mechanics.md](./DIBS-QUBO-Compiler-Mechanics.md) · Implementation: [`packages/quantum-lab/qubo/`](../../packages/quantum-lab/qubo/)
+Compiler mechanics: [DIBS-QUBO-Compiler-Mechanics.md](./DIBS-QUBO-Compiler-Mechanics.md) · Validator logic: [DIBS-Independent-Validator-Logic.md](./DIBS-Independent-Validator-Logic.md) · Implementation: [`packages/quantum-lab/`](../../packages/quantum-lab/)
 
 ## What it is allowed to do
 

@@ -18,6 +18,7 @@
  */
 
 import { canonicalHash } from './hash';
+import { scenarioHash } from './scenario';
 import {
   CompileResult,
   ConstraintRecord,
@@ -366,6 +367,7 @@ export function compileQubo(scenario: FrozenScenario, policy: PenaltyPolicy): Co
   const body: Omit<QuboArtifact, 'qubo_artifact_id' | 'artifact_hash'> = {
     kind: 'DIBS_QLAB_QUBO_ARTIFACT',
     scenario_id: scenario.scenario_id,
+    scenario_hash: scenarioHash(scenario),
     policy_version_frozen: scenario.policy_version_frozen,
     manifest_hash_frozen: scenario.manifest_hash_frozen,
     encoding_version: ENCODING_VERSION,
@@ -374,6 +376,7 @@ export function compileQubo(scenario: FrozenScenario, policy: PenaltyPolicy): Co
     spin_map: 'z=1-2x',
     n,
     symbol_table: symbols,
+    symbol_table_hash: canonicalHash(symbols),
     Q: { diag, offdiag },
     E0,
     ising: { h, J, offset },
