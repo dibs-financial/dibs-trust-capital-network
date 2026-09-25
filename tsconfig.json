@@ -20,6 +20,6 @@
       "@backend/*": ["backend/*"]
     }
   },
-  "include": ["backend/**/*", "shared/**/*", "tests/**/*"],
+  "include": ["backend/**/*", "shared/**/*", "tests/**/*", "packages/**/*"],
   "exclude": ["node_modules", "dist", "lib", "frontend", "contracts"]
 }
