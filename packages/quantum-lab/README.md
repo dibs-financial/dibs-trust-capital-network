@@ -8,7 +8,7 @@ Research harness for the DIBS Quantum Optimization Lab. It is a scenario engine,
 
 | Folder | Status |
 | :-- | :-- |
-| `qubo/` | QUBO compiler, `draw-window/v1`: `FrozenScenario + PenaltyPolicy → (Q, symbol table, compile report)` |
+| `qubo/` | QUBO compiler, `draw-window/v1`: `FrozenScenario + PenaltyPolicy → qubo_artifact` (`qlab.qubo_artifact.v1`) |
 | `validators/` | Independent validator, `validator/v1`: `qubo_artifact + bitstring + frozen book → signed ValidationReport` |
 | `classical/`, `qaoa/`, `experiments/` | Not started |
 

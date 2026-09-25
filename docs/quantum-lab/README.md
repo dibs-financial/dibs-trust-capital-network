@@ -4,7 +4,7 @@ The Quantum Optimization Lab is a **scenario engine, not a capital engine**. It 
 
 Full memo: [DIBS-Quantum-Lab-Optimization-Exploration.md](./DIBS-Quantum-Lab-Optimization-Exploration.md)
 
-Compiler mechanics: [DIBS-QUBO-Compiler-Mechanics.md](./DIBS-QUBO-Compiler-Mechanics.md) · Validator logic: [DIBS-Independent-Validator-Logic.md](./DIBS-Independent-Validator-Logic.md) · Implementation: [`packages/quantum-lab/`](../../packages/quantum-lab/)
+Compiler mechanics: [DIBS-QUBO-Compiler-Mechanics.md](./DIBS-QUBO-Compiler-Mechanics.md) · Validator logic: [DIBS-Independent-Validator-Logic.md](./DIBS-Independent-Validator-Logic.md) · Artifact schema: [DIBS-QUBO-Artifact-Structure.md](./DIBS-QUBO-Artifact-Structure.md) · Implementation: [`packages/quantum-lab/`](../../packages/quantum-lab/)
 
 ## What it is allowed to do
 
@@ -49,13 +49,13 @@ The compiler is a pure, deterministic function. Same inputs, same outputs, byte 
 | `FrozenScenario` | Snapshot ID and content hash. Draws that already pass Autopilot eligibility, with amounts $a_i$ as integer minor units. Windows $T$ and liquidity caps $L_t$ from the classical cash ladder. Precedence pairs. Crowding / concentration weights $c_{ij}$, $\kappa_{ss'}$. Exposure caps $E_s^{\max}$. Reserve bands $R_k$. Excluded items, each with a reason code. |
 | `PenaltyPolicy` | Versioned. $P_c$ for each hard constraint in $H$, and $w_s$ for each soft preference in $S$. |
 
-**Outputs**
+**Outputs** — one `qubo_artifact` (`qlab.qubo_artifact.v1`; full field list in [DIBS-QUBO-Artifact-Structure.md](./DIBS-QUBO-Artifact-Structure.md))
 
 | Output | Contents |
 | :-- | :-- |
 | `Q` | Symmetric QUBO matrix plus constant $E_0$, so $E(x)=x^\top Q x + E_0$ (`q_layout = symmetric_xTQx`, $Q_{ij}=Q_{ji}=\alpha/2$). Ising map $z=1-2x$. |
-| Symbol table | Bit index → decision variable ($x_{i,t}$, $z_i$, $y_s$, $r_k$), with the source draw / SPV / window / band ID. The validator uses it to decode a bitstring back into a schedule. |
-| Compile report | Input hashes and the `PenaltyPolicy` version. Bit count, density of $Q$, slack / one-hot overhead. Money scaling factor. Excluded items and reason codes. The penalty-floor check for each $c \in H$. |
+| Symbol table | Bit index → named symbol (`decision` $x_{i,t}$, `deferral` $z_i$, `slack` $s_b$), with draw / window / SPV and slack group. One-hot and slack groups are tagged. The validator decodes with it and drops slack before replay. |
+| Compile report | Pre-filtered draws, pruned variables and pairs, refused (legal) constraints, penalty terms with the floor check, and `uncompiled_hard` (LTV, reserve, concentration, legal) for the validator to replay. Identity hashes (freeze, penalty policy, baseline, symbol table, report, Q payload) and a `payload_hash` bind it all. |
 
 **Rules**
 

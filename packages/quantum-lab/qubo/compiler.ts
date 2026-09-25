@@ -1,35 +1,46 @@
 /**
- * DIBS Quantum Lab — QUBO compiler (draw-window/v1).
+ * DIBS Quantum Lab — QUBO compiler (draw-window/v1), emitting qlab.qubo_artifact.v1.
  *
- *   FrozenScenario + PenaltyPolicy → (Q, symbol table, compile report)
+ *   FrozenScenario + PenaltyPolicy → qubo_artifact (Q, symbol table, compile report)
  *
- * PARKED / offline research. The output is a versioned artifact for a solver and
+ * PARKED / offline research. The output is a versioned model for a solver and
  * the independent validator. It is not a schedule, not an approval, and not an
  * input type of any Autopilot command.
  *
- * Pipeline (docs/quantum-lab/DIBS-QUBO-Compiler-Mechanics.md):
+ * Specs: docs/quantum-lab/DIBS-QUBO-Compiler-Mechanics.md,
+ *        docs/quantum-lab/DIBS-QUBO-Artifact-Structure.md
+ *
  *   validate IR → name bits (with pruning) → objective → constraints
  *   (one-hot, precedence pairs, budget pair-prune or slack) → penalty floor
- *   → assemble symmetric Q → Ising map → hash.
+ *   → assemble symmetric Q → Ising image → hash.
  *
  * All IR weights and penalties are integers, so Q holds integers and
- * half-integers, and h / J / offset hold quarter-integers — exact in float64.
- * A range check refuses anything that would lose that exactness.
+ * half-integers, and h / J / energy_shift hold quarter-integers — exact in
+ * float64. A range check refuses anything that would lose that exactness.
  */
 
 import { canonicalHash } from './hash';
 import { scenarioHash } from './scenario';
 import {
+  ARTIFACT_VERSION,
+  COMPILER_VERSION,
+  CompileOptions,
+  CompileReport,
   CompileResult,
-  ConstraintRecord,
   ENCODING_VERSION,
   FrozenDraw,
   FrozenScenario,
+  JEntry,
+  OneHotGroup,
   PenaltyPolicy,
+  PenaltyTerm,
+  PrunedPair,
   PrunedVariable,
+  QOffDiag,
   QuboArtifact,
   Refusal,
-  SymEntry,
+  SCHEMA_VERSION,
+  SlackGroup,
   SymbolEntry,
   SymbolKind,
 } from './types';
@@ -38,8 +49,12 @@ import { validatePenaltyPolicy, validateScenario } from './validate';
 /** Search budget for proving that pairwise budget couplings are exact for a window. */
 const PAIR_PRUNE_SEARCH_LIMIT = 200_000;
 
+const UTC_ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
+
+const PREFILTER_REASONS = new Set(['hold', 'unverified_payee', 'sanctions', 'kyc', 'docs', 'settlement_unavailable']);
+
 /** Constraint classes the compiler never encodes. Pre-filter removes them; the validator re-checks them. */
-const REFUSED_CONSTRAINT_CLASSES = [
+const LEGAL_NOT_COMPILED = [
   'legal_eligibility',
   'kyc_aml',
   'sanctions',
@@ -47,6 +62,14 @@ const REFUSED_CONSTRAINT_CLASSES = [
   'open_holds',
   'payee_verification',
   'settlement_route',
+];
+
+/** Hard constraints in the validator catalog that v1 never puts into Q. */
+const UNCOMPILED_HARD: QuboArtifact['uncompiled_hard'] = [
+  { code: 'CONCENTRATION', reason: 'validator_only' },
+  { code: 'LEGAL', reason: 'prefilter' },
+  { code: 'LTV', reason: 'validator_only' },
+  { code: 'RESERVE', reason: 'validator_only' },
 ];
 
 /** Exported for tests only; not part of the package surface in index.ts. */
@@ -87,15 +110,15 @@ export class QuboBuilder {
     this.E0 += P * b * b;
   }
 
-  /** Symmetric layout: Q_ij = Q_ji = α/2. */
-  offdiag(): SymEntry[] {
-    const out: SymEntry[] = [];
+  /** Symmetric layout: Q_ij = Q_ji = α/2, stored once with i < j. */
+  offdiag(): QOffDiag[] {
+    const out: QOffDiag[] = [];
     for (const [key, alpha] of this.pairs) {
       if (alpha === 0) continue;
-      const [p, q] = key.split(',').map(Number);
-      out.push([p, q, alpha / 2]);
+      const [i, j] = key.split(',').map(Number);
+      out.push({ i, j, q: alpha / 2 });
     }
-    return out.sort((l, r) => l[0] - r[0] || l[1] - r[1]);
+    return out.sort((l, r) => l.i - r.i || l.j - r.j);
   }
 }
 
@@ -106,6 +129,23 @@ function byId<T extends { id: string }>(a: T, b: T): number {
 function gcd(a: number, b: number): number {
   while (b) [a, b] = [b, a % b];
   return a;
+}
+
+/** Deterministic UUID (RFC 9562 version 8) from the payload hash: same model, same id. */
+export function artifactIdFromHash(hash: string): string {
+  const variant = ((parseInt(hash[16], 16) & 0x3) | 0x8).toString(16);
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-8${hash.slice(13, 16)}-${variant}${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+}
+
+/** Hash of the Q payload block. */
+export function qPayloadHash(a: Pick<QuboArtifact, 'n' | 'q_layout' | 'E0' | 'Q_diag' | 'Q_offdiag' | 'scale'>): string {
+  return canonicalHash({ n: a.n, q_layout: a.q_layout, E0: a.E0, Q_diag: a.Q_diag, Q_offdiag: a.Q_offdiag, scale: a.scale });
+}
+
+/** Hash of everything except the payload hash, the id derived from it, and signature fields. */
+export function artifactPayloadHash(a: QuboArtifact | Omit<QuboArtifact, 'qubo_artifact_id' | 'payload_hash'>): string {
+  const { qubo_artifact_id: _id, payload_hash: _ph, signature_key_id: _k, signature: _s, ...body } = a as QuboArtifact;
+  return canonicalHash(body);
 }
 
 /**
@@ -136,9 +176,35 @@ function refuse(refusals: Refusal[]): CompileResult {
   return { status: 'REQUIRES_REMODELING', refusals };
 }
 
-export function compileQubo(scenario: FrozenScenario, policy: PenaltyPolicy): CompileResult {
+function validateOptions(o: CompileOptions, draws: FrozenDraw[]): Refusal[] {
+  const out: Refusal[] = [];
+  if (!o || typeof o.created_at !== 'string' || !UTC_ISO.test(o.created_at)) {
+    out.push({ code: 'INVALID_OPTIONS', message: 'created_at must be UTC ISO-8601 ending in Z.', path: 'options.created_at' });
+  }
+  if (!o || typeof o.idempotency_key !== 'string' || o.idempotency_key.length === 0) {
+    out.push({ code: 'INVALID_OPTIONS', message: 'idempotency_key is required.', path: 'options.idempotency_key' });
+  }
+  const inIr = new Set(draws.map((d) => d.id));
+  for (const p of o?.prefiltered_draws ?? []) {
+    if (!PREFILTER_REASONS.has(p.reason)) {
+      out.push({ code: 'INVALID_OPTIONS', message: `Unknown pre-filter reason ${String(p.reason)}.`, path: 'options.prefiltered_draws' });
+    }
+    if (inIr.has(p.draw_id)) {
+      out.push({ code: 'LEGAL_FLAG_IN_IR', message: `Draw ${p.draw_id} was pre-filtered but is still in the IR.`, path: 'options.prefiltered_draws' });
+    }
+  }
+  const b = o?.classical_baseline;
+  if (b && (typeof b.id !== 'string' || !b.id || typeof b.hash !== 'string' || !b.hash)) {
+    out.push({ code: 'INVALID_OPTIONS', message: 'classical_baseline needs id and hash.', path: 'options.classical_baseline' });
+  }
+  return out;
+}
+
+export function compileQubo(scenario: FrozenScenario, policy: PenaltyPolicy, options: CompileOptions): CompileResult {
   const inputRefusals = [...validatePenaltyPolicy(policy), ...validateScenario(scenario, policy)];
   if (inputRefusals.length > 0) return refuse(inputRefusals);
+  const optionRefusals = validateOptions(options, scenario.draws);
+  if (optionRefusals.length > 0) return refuse(optionRefusals);
 
   const P = policy.penalties;
   const windows = scenario.windows; // array order is time order
@@ -148,30 +214,45 @@ export function compileQubo(scenario: FrozenScenario, policy: PenaltyPolicy): Co
   const qb = new QuboBuilder();
   const symbols: SymbolEntry[] = [];
   const pruned: PrunedVariable[] = [];
-  const constraints: ConstraintRecord[] = [];
+  const prunedPairs: PrunedPair[] = [];
+  const penaltyTerms: Array<Omit<PenaltyTerm, 'delta_E_max' | 'satisfied_floor'>> = [];
+  const oneHot: OneHotGroup[] = [];
+  const slackGroups: SlackGroup[] = [];
   const xBit = new Map<string, number>(); // `${draw}|${window}` → bit
   const zBit = new Map<string, number>();
 
-  const newSymbol = (entry: Omit<SymbolEntry, 'index'>): number => {
+  const newSymbol = (entry: Partial<SymbolEntry> & Pick<SymbolEntry, 'name' | 'kind' | 'role'>): number => {
     const index = qb.addBit();
-    symbols.push({ index, ...entry });
+    symbols.push({
+      index,
+      draw_id: null,
+      window_id: null,
+      spv_id: null,
+      band_id: null,
+      slack_group: null,
+      slack_weight: null,
+      ...entry,
+    });
     return index;
   };
+  const nameOf = (i: number) => symbols[i].name;
 
   // --- Variables: x_{i,t} (pruned where impossible), then z_i -------------------
   for (const d of draws) {
     const eligible = new Set(d.window_eligibility);
+    let any = false;
     for (const w of windows) {
-      const variable = `x[${d.id},${w.id}]`;
-      if (!eligible.has(w.id)) {
-        pruned.push({ variable, draw_id: d.id, window_id: w.id, reason: 'WINDOW_NOT_ELIGIBLE' });
-      } else if (d.amount_minor > w.liquidity_cap_minor) {
-        pruned.push({ variable, draw_id: d.id, window_id: w.id, reason: 'AMOUNT_EXCEEDS_WINDOW_CAP' });
-      } else {
-        xBit.set(`${d.id}|${w.id}`, newSymbol({ name: variable, kind: 'x', draw_id: d.id, window_id: w.id }));
+      const name = `x[${d.id},${w.id}]`;
+      if (!eligible.has(w.id)) continue; // never in the draw's domain
+      if (d.amount_minor > w.liquidity_cap_minor) {
+        pruned.push({ name, reason: 'amount_gt_window' });
+        continue;
       }
+      any = true;
+      xBit.set(`${d.id}|${w.id}`, newSymbol({ name, kind: 'decision', role: 'draw_window', draw_id: d.id, window_id: w.id, spv_id: d.spv_id }));
     }
-    zBit.set(d.id, newSymbol({ name: `z[${d.id}]`, kind: 'z', draw_id: d.id }));
+    if (!any) pruned.push({ name: `x[${d.id},*]`, reason: 'domain_empty' });
+    zBit.set(d.id, newSymbol({ name: `z[${d.id}]`, kind: 'deferral', role: 'draw_window', draw_id: d.id, spv_id: d.spv_id }));
   }
 
   // --- Objective (economic + concentration) --------------------------------------
@@ -184,12 +265,11 @@ export function compileQubo(scenario: FrozenScenario, policy: PenaltyPolicy): Co
       qb.addLinear(p, coef);
       deltaEMax += Math.abs(coef);
     }
-    const z = zBit.get(d.id)!;
-    qb.addLinear(z, d.deferral_cost);
+    qb.addLinear(zBit.get(d.id)!, d.deferral_cost);
     deltaEMax += Math.abs(d.deferral_cost);
   }
-  const concentration = [...scenario.concentration_pairs].sort(
-    (a, b) => (a.left + '|' + a.right < b.left + '|' + b.right ? -1 : a.left + '|' + a.right > b.left + '|' + b.right ? 1 : 0),
+  const concentration = [...scenario.concentration_pairs].sort((a, b) =>
+    a.left + '|' + a.right < b.left + '|' + b.right ? -1 : a.left + '|' + a.right > b.left + '|' + b.right ? 1 : 0,
   );
   for (const c of concentration) {
     if (c.weight === 0) continue;
@@ -204,20 +284,20 @@ export function compileQubo(scenario: FrozenScenario, policy: PenaltyPolicy): Co
 
   // --- Cardinality: Σ_t x_{i,t} + z_i = 1 ---------------------------------------
   for (const d of draws) {
-    const bits = windows
-      .map((w) => xBit.get(`${d.id}|${w.id}`))
-      .filter((b): b is number => b !== undefined);
+    const bits = windows.map((w) => xBit.get(`${d.id}|${w.id}`)).filter((b): b is number => b !== undefined);
     bits.push(zBit.get(d.id)!);
     qb.addSquaredLinear(bits.map((b) => [b, 1]), 1, P.cardinality);
-    constraints.push({ id: `card[${d.id}]`, kind: 'cardinality', penalty: P.cardinality, delta_e_max: 0, v_min: 1, bits });
+    const id = `card[${d.id}]`;
+    oneHot.push({ group_id: id, indices: [...bits].sort((a, b) => a - b), cardinality: 'exactly_one' });
+    penaltyTerms.push({ constraint_id: id, P_c: P.cardinality, v_min2: 1 });
   }
 
-  // --- Precedence: forbid after-draw in a window not strictly later than before-draw
+  // --- Precedence: forbid the after-draw in a window not strictly later ---------
   const precedence = [...scenario.precedence].sort((a, b) =>
     a.before + '|' + a.after < b.before + '|' + b.after ? -1 : a.before + '|' + a.after > b.before + '|' + b.after ? 1 : 0,
   );
   for (const pr of precedence) {
-    const bits = new Set<number>();
+    let used = false;
     for (const tAfter of windows) {
       const pa = xBit.get(`${pr.after}|${tAfter.id}`);
       if (pa === undefined) continue;
@@ -226,25 +306,16 @@ export function compileQubo(scenario: FrozenScenario, policy: PenaltyPolicy): Co
         if (pb === undefined) continue;
         if (windowPos.get(tAfter.id)! <= windowPos.get(tBefore.id)!) {
           qb.addPair(pa, pb, P.precedence);
-          bits.add(pa).add(pb);
+          prunedPairs.push({ left_symbol: nameOf(pb), right_symbol: nameOf(pa), reason: 'tranche_forbid' });
+          used = true;
         }
       }
     }
-    if (bits.size > 0) {
-      constraints.push({
-        id: `prec[${pr.before}<${pr.after}]`,
-        kind: 'precedence',
-        penalty: P.precedence,
-        delta_e_max: 0,
-        v_min: 1,
-        bits: [...bits].sort((a, b) => a - b),
-      });
-    }
+    if (used) penaltyTerms.push({ constraint_id: `prec[${pr.before}<${pr.after}]`, P_c: P.precedence, v_min2: 1 });
   }
 
   // --- Budget: Σ_i a_i x_{i,t} ≤ L_t ---------------------------------------------
   const budgetEncoding: Record<string, 'none' | 'pair_prune' | 'slack'> = {};
-  const slackUnits: Record<string, number> = {};
   const slackRefusals: Refusal[] = [];
   for (const w of windows) {
     const members = draws
@@ -252,6 +323,7 @@ export function compileQubo(scenario: FrozenScenario, policy: PenaltyPolicy): Co
       .filter((m): m is { d: FrozenDraw; p: number } => m.p !== undefined);
     const cap = w.liquidity_cap_minor;
     const total = members.reduce((s, m) => s + m.d.amount_minor, 0);
+    const constraintId = `budget[${w.id}]`;
     if (total <= cap) {
       budgetEncoding[w.id] = 'none';
       continue;
@@ -259,23 +331,15 @@ export function compileQubo(scenario: FrozenScenario, policy: PenaltyPolicy): Co
     const exact = pairPruneIsExact(members.map((m) => m.d.amount_minor), cap);
     if (exact === true) {
       budgetEncoding[w.id] = 'pair_prune';
-      const bits = new Set<number>();
       for (let i = 0; i < members.length; i++) {
         for (let j = i + 1; j < members.length; j++) {
           if (members[i].d.amount_minor + members[j].d.amount_minor > cap) {
             qb.addPair(members[i].p, members[j].p, P.budget);
-            bits.add(members[i].p).add(members[j].p);
+            prunedPairs.push({ left_symbol: nameOf(members[i].p), right_symbol: nameOf(members[j].p), reason: 'budget_pair' });
           }
         }
       }
-      constraints.push({
-        id: `budget[${w.id}]`,
-        kind: 'budget_pair',
-        penalty: P.budget,
-        delta_e_max: 0,
-        v_min: 1,
-        bits: [...bits].sort((a, b) => a - b),
-      });
+      penaltyTerms.push({ constraint_id: constraintId, P_c: P.budget, v_min2: 1 });
       continue;
     }
 
@@ -292,112 +356,136 @@ export function compileQubo(scenario: FrozenScenario, policy: PenaltyPolicy): Co
       continue;
     }
     budgetEncoding[w.id] = 'slack';
-    slackUnits[w.id] = unit;
+    const groupId = `slack[${w.id}]`;
     const terms: Array<[number, number]> = members.map((m) => [m.p, m.d.amount_minor / unit]);
+    const slackIdx: number[] = [];
     for (let b = 0; b < slackBits; b++) {
-      const s = newSymbol({ name: `s[${w.id},b${b}]`, kind: 'slack', window_id: w.id, bit: b });
+      const s = newSymbol({ name: `s[${w.id},b${b}]`, kind: 'slack', role: 'slack_bit', window_id: w.id, slack_group: groupId, slack_weight: 2 ** b });
       terms.push([s, 2 ** b]);
+      slackIdx.push(s);
     }
     qb.addSquaredLinear(terms, capUnits, P.budget);
-    constraints.push({
-      id: `budget[${w.id}]`,
-      kind: 'budget_slack',
-      penalty: P.budget,
-      delta_e_max: 0,
-      v_min: 1,
-      bits: terms.map(([p]) => p).sort((a, b) => a - b),
-    });
+    slackGroups.push({ group_id: groupId, constraint_id: constraintId, indices: slackIdx, max_value: 2 ** slackBits - 1, unit_minor: unit });
+    penaltyTerms.push({ constraint_id: constraintId, P_c: P.budget, v_min2: 1 });
   }
   if (slackRefusals.length > 0) return refuse(slackRefusals);
 
   // --- Penalty floor: P_c > ΔE_max / v_min² ---------------------------------------
+  const terms: PenaltyTerm[] = penaltyTerms.map((t) => ({
+    ...t,
+    delta_E_max: deltaEMax,
+    satisfied_floor: t.P_c > deltaEMax / t.v_min2,
+  }));
   // One refusal per constraint kind is enough to act on.
   const floorRefusals = new Map<string, Refusal>();
-  for (const c of constraints) {
-    c.delta_e_max = deltaEMax;
-    const floor = deltaEMax / (c.v_min * c.v_min);
-    if (!(c.penalty > floor) && !floorRefusals.has(c.kind)) {
-      floorRefusals.set(c.kind, {
+  for (const t of terms) {
+    const kind = t.constraint_id.split('[')[0];
+    if (!t.satisfied_floor && !floorRefusals.has(kind)) {
+      floorRefusals.set(kind, {
         code: 'PENALTY_BELOW_FLOOR',
-        message: `${c.kind} penalty ${c.penalty} is not above ΔE_max/v_min² = ${floor} (first: ${c.id}).`,
+        message: `${kind} penalty ${t.P_c} is not above ΔE_max/v_min² = ${deltaEMax / t.v_min2} (first: ${t.constraint_id}).`,
       });
     }
   }
   if (floorRefusals.size > 0) return refuse([...floorRefusals.values()]);
 
   // --- Assemble -------------------------------------------------------------------
-  const diag = qb.diag.slice();
-  const offdiag = qb.offdiag();
+  const Q_diag = qb.diag.slice();
+  const Q_offdiag = qb.offdiag();
   const E0 = qb.E0;
-  const n = diag.length;
+  const n = Q_diag.length;
 
-  // Ising, z = 1 − 2x:  h_i = −Q_ii/2 − Σ_j Q_ij/2,  J_ij = Q_ij/2,  offset = E0 + ΣQ_ii/2 + Σ_{i<j} Q_ij/2
-  const h = diag.map((q) => -q / 2);
-  let offset = E0 + diag.reduce((s, q) => s + q / 2, 0);
-  const J: SymEntry[] = [];
-  for (const [i, j, v] of offdiag) {
-    h[i] -= v / 2;
-    h[j] -= v / 2;
-    J.push([i, j, v / 2]);
-    offset += v / 2;
+  // Ising, z = 1 − 2x:  h_i = −Q_ii/2 − Σ_j Q_ij/2,  J_ij = Q_ij/2,  shift = E0 + ΣQ_ii/2 + Σ_{i<j} Q_ij/2
+  const h = Q_diag.map((q) => -q / 2);
+  let energyShift = E0 + Q_diag.reduce((s, q) => s + q / 2, 0);
+  const J_sparse: JEntry[] = [];
+  for (const { i, j, q } of Q_offdiag) {
+    h[i] -= q / 2;
+    h[j] -= q / 2;
+    J_sparse.push({ i, j, value: q / 2 });
+    energyShift += q / 2;
   }
 
   const exactValues = [
-    ...diag,
-    ...offdiag.map((e) => e[2] * 2),
+    ...Q_diag,
+    ...Q_offdiag.map((e) => e.q * 2),
     E0,
     ...h.map((v) => v * 4),
-    ...J.map((e) => e[2] * 4),
-    offset * 4,
+    ...J_sparse.map((e) => e.value * 4),
+    energyShift * 4,
   ];
   if (!exactValues.every((v) => Number.isSafeInteger(v))) {
-    return refuse([
-      {
-        code: 'NUMERIC_RANGE',
-        message: 'Q or Ising coefficients exceed exact float64 range; reduce weights/penalties or remodel.',
-      },
-    ]);
+    return refuse([{ code: 'NUMERIC_RANGE', message: 'Q or Ising coefficients exceed exact float64 range; reduce weights/penalties or remodel.' }]);
   }
 
-  const energyScale = Math.max(1, ...diag.map(Math.abs), ...offdiag.map((e) => Math.abs(e[2])));
-  const bitsByKind: Record<SymbolKind, number> = { x: 0, z: 0, slack: 0 };
+  const bitsByKind: Record<SymbolKind, number> = { decision: 0, deferral: 0, slack: 0, ancilla: 0 };
   for (const s of symbols) bitsByKind[s.kind]++;
   const maxPairs = (n * (n - 1)) / 2;
 
-  const body: Omit<QuboArtifact, 'qubo_artifact_id' | 'artifact_hash'> = {
-    kind: 'DIBS_QLAB_QUBO_ARTIFACT',
-    scenario_id: scenario.scenario_id,
-    scenario_hash: scenarioHash(scenario),
-    policy_version_frozen: scenario.policy_version_frozen,
-    manifest_hash_frozen: scenario.manifest_hash_frozen,
-    encoding_version: ENCODING_VERSION,
-    penalty_policy_id: policy.penalty_policy_id,
-    q_layout: 'symmetric_xTQx',
-    spin_map: 'z=1-2x',
-    n,
-    symbol_table: symbols,
-    symbol_table_hash: canonicalHash(symbols),
-    Q: { diag, offdiag },
-    E0,
-    ising: { h, J, offset },
-    scale_factors: { energy_scale: energyScale, slack_unit_minor_by_window: slackUnits },
-    constraints,
+  const compileReport: CompileReport = {
+    prefiltered_draws: [...(options.prefiltered_draws ?? [])].sort((a, b) => (a.draw_id < b.draw_id ? -1 : a.draw_id > b.draw_id ? 1 : 0)),
     pruned_variables: pruned,
-    refused_constraints: REFUSED_CONSTRAINT_CLASSES,
-    report: {
-      bits: n,
-      bits_by_kind: bitsByKind,
-      nonzero_offdiag: offdiag.length,
-      density: maxPairs === 0 ? 0 : offdiag.length / maxPairs,
-      bandwidth: offdiag.reduce((m, [i, j]) => Math.max(m, j - i), 0),
-      delta_e_max: deltaEMax,
-      budget_encoding_by_window: budgetEncoding,
-    },
-    classical_baseline_ref: scenario.classical_baseline_ref ?? null,
+    pruned_pairs: prunedPairs,
+    refused_constraints: LEGAL_NOT_COMPILED.map((c) => ({ constraint_id: c, reason: 'legal_not_compiled' as const })),
+    penalty_terms: terms,
+    fixture: { solved_exactly: false, feasibility_rate: null, gap_to_mip: null },
+    warnings: [],
+    diagnostics: { bits_by_kind: bitsByKind, budget_encoding_by_window: budgetEncoding },
   };
-  const artifactHash = canonicalHash(body);
+  const scale: QuboArtifact['scale'] = {
+    amount_divisor: slackGroups.reduce((g, s) => gcd(g, s.unit_minor), 0) || 1,
+    objective_divisor: 1,
+    rounding: 'nearest_even',
+    reconstructed_unit: 'minor_units',
+  };
+
+  const body: Omit<QuboArtifact, 'qubo_artifact_id' | 'payload_hash' | 'q_payload_hash'> = {
+    schema_version: SCHEMA_VERSION,
+    artifact_version: ARTIFACT_VERSION,
+    experiment_id: options.experiment_id ?? null,
+    created_at: options.created_at,
+    compiler_version: COMPILER_VERSION,
+    encoding_version: ENCODING_VERSION,
+    idempotency_key: options.idempotency_key,
+    q_layout: 'symmetric_xTQx',
+    ising_map: 'z = 1 - 2x',
+
+    scenario_id: scenario.scenario_id,
+    scenario_freeze_hash: scenarioHash(scenario),
+    locked_policy_version: scenario.policy_version_frozen,
+    locked_evidence_manifest_hash: scenario.manifest_hash_frozen,
+    penalty_policy_id: policy.penalty_policy_id,
+    penalty_policy_hash: canonicalHash(policy),
+    classical_baseline_id: options.classical_baseline?.id ?? null,
+    classical_baseline_hash: options.classical_baseline?.hash ?? null,
+    symbol_table_hash: canonicalHash(symbols),
+
+    n,
+    symbols,
+    one_hot_groups: oneHot,
+    slack_groups: slackGroups,
+
+    E0,
+    Q_format: 'diag_plus_coo',
+    Q_diag,
+    Q_offdiag,
+    scale,
+    coefficient_unit: 'dimensionless',
+    density: maxPairs === 0 ? 0 : Q_offdiag.length / maxPairs,
+    bandwidth: Q_offdiag.reduce((m, e) => Math.max(m, e.j - e.i), 0),
+
+    h,
+    J_sparse,
+    energy_shift: energyShift,
+
+    compile_report: compileReport,
+    compile_report_hash: canonicalHash(compileReport),
+    uncompiled_hard: UNCOMPILED_HARD,
+  };
+  const withQHash = { ...body, q_payload_hash: qPayloadHash(body) };
+  const payloadHash = artifactPayloadHash(withQHash);
   return {
     status: 'COMPILED',
-    artifact: { ...body, qubo_artifact_id: `qubo_${artifactHash.slice(0, 16)}`, artifact_hash: artifactHash },
+    artifact: { qubo_artifact_id: artifactIdFromHash(payloadHash), ...withQHash, payload_hash: payloadHash },
   };
 }

@@ -5,13 +5,19 @@
 
 import { generateKeyPairSync, KeyObject } from 'crypto';
 import {
+  artifactIdFromHash,
+  artifactPayloadHash,
+  canonicalHash,
+  CompileOptions,
   compileQubo,
   FrozenScenario,
   PenaltyPolicy,
+  qPayloadHash,
   QuboArtifact,
-  canonicalHash,
+  signArtifact,
 } from '../../packages/quantum-lab/qubo';
 import {
+  ClassicalBaseline,
   FrozenBook,
   StressSpec,
   ValidationReport,
@@ -62,8 +68,14 @@ function book(s: FrozenScenario, overrides: Partial<FrozenBook> = {}): FrozenBoo
   };
 }
 
-function compile(s: FrozenScenario, p: PenaltyPolicy = POLICY): QuboArtifact {
-  const r = compileQubo(s, p);
+const OPTS: CompileOptions = { created_at: '2026-09-25T06:00:00Z', idempotency_key: 'compile-val-1' };
+
+/** MIP on the §6 toy: fund D1 only, J = −5. */
+const BASELINE: ClassicalBaseline = { baseline_id: 'mip-toy-1', objective_minor: -5, assignment: { D1: 'W1', D2: null } };
+const PINNED: CompileOptions = { ...OPTS, classical_baseline: { id: BASELINE.baseline_id, hash: canonicalHash(BASELINE) } };
+
+function compile(s: FrozenScenario, p: PenaltyPolicy = POLICY, o: CompileOptions = OPTS): QuboArtifact {
+  const r = compileQubo(s, p, o);
   if (r.status !== 'COMPILED') throw new Error(JSON.stringify(r.refusals));
   return r.artifact;
 }
@@ -72,7 +84,7 @@ function compile(s: FrozenScenario, p: PenaltyPolicy = POLICY): QuboArtifact {
 function bits(a: QuboArtifact, on: string[]): Array<0 | 1> {
   const x = new Array(a.n).fill(0) as Array<0 | 1>;
   for (const name of on) {
-    const s = a.symbol_table.find((sym) => sym.name === name);
+    const s = a.symbols.find((sym) => sym.name === name);
     if (!s) throw new Error(`no symbol ${name}`);
     x[s.index] = 1;
   }
@@ -86,7 +98,7 @@ function run(a: QuboArtifact, b: FrozenBook, x: number[], extra: Partial<Validat
       artifact: a,
       bitstring: { encoding: 'bits', values: x },
       book: b,
-      declared_penalty_policy_id: POLICY.penalty_policy_id,
+      penalty_policy: POLICY,
       occurred_at: '2026-09-25T07:00:00Z',
       ...extra,
     },
@@ -100,10 +112,14 @@ function check(r: ValidationReport, code: string, subject?: string) {
 
 /** Re-sign an artifact after tampering, the way a buggy compiler would. */
 function reseal(a: QuboArtifact): QuboArtifact {
-  const { qubo_artifact_id, artifact_hash, ...body } = a;
-  body.symbol_table_hash = canonicalHash(body.symbol_table);
-  const h = canonicalHash(body);
-  return { ...body, qubo_artifact_id: `qubo_${h.slice(0, 16)}`, artifact_hash: h };
+  const body = {
+    ...a,
+    symbol_table_hash: canonicalHash(a.symbols),
+    compile_report_hash: canonicalHash(a.compile_report),
+    q_payload_hash: qPayloadHash(a),
+  };
+  const h = artifactPayloadHash(body);
+  return { ...body, payload_hash: h, qubo_artifact_id: artifactIdFromHash(h) };
 }
 
 describe('spec §6 worked toy — 180 + 150 against a 300 cap', () => {
@@ -116,7 +132,8 @@ describe('spec §6 worked toy — 180 + 150 against a 300 cap', () => {
   const b = book(s, { cash_ladder: cashLadder });
 
   it('A — legal: CANDIDATE_VALIDATED, replay −5, budget 180 ≤ 300, tranche SKIP', () => {
-    const r = run(a, b, bits(a, ['x[D1,W1]', 'z[D2]']), { classical_baseline: { objective_minor: -5 } });
+    const pinned = compile(s, POLICY, PINNED);
+    const r = run(pinned, b, bits(pinned, ['x[D1,W1]', 'z[D2]']), { classical_baseline: BASELINE });
     expect(r.verdict).toBe('CANDIDATE_VALIDATED');
     expect(check(r, 'BUDGET_EXCEEDED', 'W1')).toMatchObject({ status: 'PASS', measured: '180', limit: '300', unit: 'minor' });
     expect(check(r, 'RESERVE_BREACH', 'W1')?.status).toBe('PASS');
@@ -179,9 +196,17 @@ describe('pass 0 — bind (fail closed, no decode)', () => {
       s2.draws[0].amount_minor = 181;
       return run(a, book(s2), x);
     }, 'BIND_SCENARIO_FREEZE_HASH'],
-    ['tampered Q', () => run({ ...a, Q: { ...a.Q, diag: a.Q.diag.map((v) => v - 1) } }, book(s), x), 'BIND_ARTIFACT_HASH'],
-    ['tampered symbol table', () => run({ ...a, symbol_table: [...a.symbol_table].reverse() }, book(s), x), 'BIND_SYMBOL_TABLE_HASH'],
-    ['undeclared penalty policy', () => run(a, book(s), x, { declared_penalty_policy_id: 'pp-other' }), 'BIND_PENALTY_POLICY'],
+    ['tampered Q', () => run({ ...a, Q_diag: a.Q_diag.map((v) => v - 1) }, book(s), x), 'BIND_Q_PAYLOAD_HASH'],
+    ['tampered symbol table', () => run({ ...a, symbols: [...a.symbols].reverse() }, book(s), x), 'BIND_SYMBOL_TABLE_HASH'],
+    ['tampered compile report', () => run({ ...a, compile_report: { ...a.compile_report, warnings: ['x'] } }, book(s), x), 'BIND_COMPILE_REPORT_HASH'],
+    ['undeclared penalty policy', () => run(a, book(s), x, { penalty_policy: { ...POLICY, penalty_policy_id: 'pp-other' } }), 'BIND_PENALTY_POLICY'],
+    ['same penalty policy id, different body', () => run(a, book(s), x, { penalty_policy: { ...POLICY, penalties: { ...POLICY.penalties, budget: 99 } } }), 'BIND_PENALTY_POLICY'],
+    ['baseline not the pinned one', () => run(a, book(s), x, { classical_baseline: BASELINE }), 'BIND_CLASSICAL_BASELINE'],
+    ['unknown schema version', () => run(reseal({ ...a, schema_version: 'qlab.qubo_artifact.v2' as 'qlab.qubo_artifact.v1' }), book(s), x), 'BIND_ARTIFACT_LITERALS'],
+    ['a field named approved', () => run(reseal({ ...a, approved: true } as QuboArtifact), book(s), x), 'FORBIDDEN_FIELD'],
+    ['Ising cache disagrees with Q', () => run(reseal({ ...a, h: a.h.map((v, i) => (i === 0 ? v + 1 : v)) }), book(s), x), 'ISING_MISMATCH'],
+    ['LTV missing from uncompiled_hard', () => run(reseal({ ...a, uncompiled_hard: a.uncompiled_hard.filter((u) => u.code !== 'LTV') }), book(s), x), 'HARD_CONSTRAINT_UNACCOUNTED'],
+    ['compiler key given, artifact unsigned', () => run(a, book(s), x, { compiler_public_key: publicKey }), 'BIND_ARTIFACT_SIGNATURE'],
     ['policy version not the locked one', () => run(a, book(s, { locked_policy_version: 'policy-2026.10.01' }), x), 'BIND_LOCKED_POLICY_VERSION'],
     ['evidence manifest not the locked one', () => run(a, book(s, { locked_evidence_manifest_hash: 'sha256:other' }), x), 'BIND_EVIDENCE_MANIFEST_HASH'],
     ['legal flag inside the IR', () => {
@@ -207,6 +232,26 @@ describe('pass 0 — bind (fail closed, no decode)', () => {
     expect(r.verdict_reasons).toContain(code);
     expect(r.decoded_x).toBeNull();
     expect(r.decoded_schedule).toBeNull();
+  });
+});
+
+describe('artifact signature and pre-filter record', () => {
+  const s = scenario();
+  const a = compile(s);
+  const x = bits(a, ['x[D1,W1]', 'z[D2]']);
+
+  it('accepts a compiler-signed artifact under the compiler key, and not under another', () => {
+    const compilerKeys = generateKeyPairSync('ed25519');
+    const signed = signArtifact(a, 'qlab-compiler-test', compilerKeys.privateKey);
+    expect(run(signed, book(s), x, { compiler_public_key: compilerKeys.publicKey }).verdict).toBe('CANDIDATE_VALIDATED');
+    expect(run(signed, book(s), x, { compiler_public_key: publicKey }).verdict_reasons).toContain('BIND_ARTIFACT_SIGNATURE');
+  });
+
+  it('a bit for a draw the compile report says was pre-filtered → REQUIRES_REMODELING', () => {
+    const lying = reseal({ ...a, compile_report: { ...a.compile_report, prefiltered_draws: [{ draw_id: 'D2', reason: 'hold' }] } });
+    const r = run(lying, book(s), x);
+    expect(r.verdict).toBe('REQUIRES_REMODELING');
+    expect(check(r, 'INELIGIBLE_BIT_ALLOCATED')).toMatchObject({ status: 'FAIL', subject: 'D2' });
   });
 });
 
@@ -267,10 +312,10 @@ describe('pass 1–3 — decode, ancillas, reconstruction', () => {
 
     it('too narrow for the residual → SLACK_RANGE_INSUFFICIENT → REQUIRES_REMODELING', () => {
       // A compiler that claimed 50-unit steps (10 needed) but kept 3 bits (reach 7).
-      const narrow = reseal({ ...sa, scale_factors: { ...sa.scale_factors, slack_unit_minor_by_window: { W1: 50 } } });
+      const narrow = reseal({ ...sa, slack_groups: sa.slack_groups.map((g) => ({ ...g, unit_minor: 50 })), scale: { ...sa.scale, amount_divisor: 50 } });
       const r = run(narrow, book(ss), bits(narrow, ['x[A,W1]', 'z[B]', 'z[C]']));
       expect(r.verdict).toBe('REQUIRES_REMODELING');
-      expect(check(r, 'SLACK_RANGE_INSUFFICIENT', 'W1')).toMatchObject({ status: 'FAIL', measured: '7', limit: '10' });
+      expect(check(r, 'SLACK_RANGE_INSUFFICIENT', 'budget[W1]')).toMatchObject({ status: 'FAIL', measured: '7', limit: '10' });
     });
   });
 });
@@ -350,13 +395,13 @@ describe('pass 7 — declared stress set', () => {
 
 describe('pass 8 — gap to the classical baseline', () => {
   const s = scenario();
-  const a = compile(s);
+  const a = compile(s, POLICY, PINNED);
   it('is metadata unless a bar is declared; a declared bar rejects', () => {
     const deferAll = bits(a, ['z[D1]', 'z[D2]']);
-    const free = run(a, book(s), deferAll, { classical_baseline: { objective_minor: -5 } });
+    const free = run(a, book(s), deferAll, { classical_baseline: BASELINE });
     expect(free.verdict).toBe('CANDIDATE_VALIDATED');
     expect(free.gap_bps).toBe('10000');
-    const barred = run(a, book(s), deferAll, { classical_baseline: { objective_minor: -5, max_gap_bps: 500 } });
+    const barred = run(a, book(s), deferAll, { classical_baseline: BASELINE, max_gap_bps: 500 });
     expect(barred.verdict).toBe('REJECTED');
     expect(check(barred, 'GAP_EXCEEDED')).toMatchObject({ status: 'FAIL', measured: '10000', limit: '500' });
   });
@@ -385,7 +430,7 @@ describe('pass 9 — signed report', () => {
   it('refuses a non-Ed25519 signing key', () => {
     const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey;
     expect(() => validateCandidate(
-      { experiment_id: 'e', artifact: a, bitstring: { encoding: 'bits', values: [0, 0, 0, 0] }, book: book(s), declared_penalty_policy_id: POLICY.penalty_policy_id, occurred_at: '2026-09-25T07:00:00Z' },
+      { experiment_id: 'e', artifact: a, bitstring: { encoding: 'bits', values: [0, 0, 0, 0] }, book: book(s), penalty_policy: POLICY, occurred_at: '2026-09-25T07:00:00Z' },
       { key_id: 'rsa', private_key: rsa },
     )).toThrow('Ed25519');
   });
@@ -430,9 +475,9 @@ describe('independence — validator and brute-force agree on every bitstring of
       const place = new Map<string, string | null>();
       let ok = true;
       for (const d of toy.draws) {
-        const on = a.symbol_table.filter((sy) => sy.draw_id === d.id && x[sy.index] === 1);
+        const on = a.symbols.filter((sy) => sy.draw_id === d.id && x[sy.index] === 1);
         if (on.length !== 1) ok = false;
-        else place.set(d.id, on[0].kind === 'z' ? null : on[0].window_id!);
+        else place.set(d.id, on[0].kind === 'deferral' ? null : on[0].window_id!);
       }
       if (ok) {
         for (const w of toy.windows) {

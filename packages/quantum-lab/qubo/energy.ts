@@ -9,23 +9,23 @@ import { QuboArtifact } from './types';
 export function quboEnergy(artifact: QuboArtifact, x: ReadonlyArray<0 | 1>): number {
   if (x.length !== artifact.n) throw new Error(`Expected ${artifact.n} bits, got ${x.length}.`);
   let e = artifact.E0;
-  artifact.Q.diag.forEach((q, i) => {
+  artifact.Q_diag.forEach((q, i) => {
     if (x[i]) e += q;
   });
-  for (const [i, j, v] of artifact.Q.offdiag) {
-    if (x[i] && x[j]) e += 2 * v;
+  for (const { i, j, q } of artifact.Q_offdiag) {
+    if (x[i] && x[j]) e += 2 * q;
   }
   return e;
 }
 
-/** H(z) = Σ h_i z_i + Σ_{i<j} J_ij z_i z_j + offset for z ∈ {−1,+1}^n. */
+/** H(z) = Σ h_i z_i + Σ_{i<j} J_ij z_i z_j + energy_shift for z ∈ {−1,+1}^n. */
 export function isingEnergy(artifact: QuboArtifact, z: ReadonlyArray<-1 | 1>): number {
   if (z.length !== artifact.n) throw new Error(`Expected ${artifact.n} spins, got ${z.length}.`);
-  let e = artifact.ising.offset;
-  artifact.ising.h.forEach((h, i) => {
+  let e = artifact.energy_shift;
+  artifact.h.forEach((h, i) => {
     e += h * z[i];
   });
-  for (const [i, j, v] of artifact.ising.J) e += v * z[i] * z[j];
+  for (const { i, j, value } of artifact.J_sparse) e += value * z[i] * z[j];
   return e;
 }
 

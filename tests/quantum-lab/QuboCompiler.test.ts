@@ -14,7 +14,10 @@ import {
   QuboArtifact,
   quboEnergy,
 } from '../../packages/quantum-lab/qubo';
-import { QuboBuilder } from '../../packages/quantum-lab/qubo/compiler';
+import { artifactIdFromHash, QuboBuilder } from '../../packages/quantum-lab/qubo/compiler';
+import { CompileOptions } from '../../packages/quantum-lab/qubo/types';
+
+const OPTS: CompileOptions = { created_at: '2026-09-25T06:00:00Z', idempotency_key: 'compile-toy-1' };
 
 const POLICY: PenaltyPolicy = {
   penalty_policy_id: 'pp-toy-v1',
@@ -58,13 +61,13 @@ function toyScenario(): FrozenScenario {
 }
 
 function compiled(s: FrozenScenario, p: PenaltyPolicy = POLICY): QuboArtifact {
-  const r = compileQubo(s, p);
+  const r = compileQubo(s, p, OPTS);
   if (r.status !== 'COMPILED') throw new Error(JSON.stringify(r.refusals));
   return r.artifact;
 }
 
 function refusalCodes(s: FrozenScenario, p: PenaltyPolicy = POLICY): string[] {
-  const r = compileQubo(s, p);
+  const r = compileQubo(s, p, OPTS);
   if (r.status !== 'REQUIRES_REMODELING') throw new Error('expected refusal');
   return r.refusals.map((x) => x.code);
 }
@@ -83,9 +86,9 @@ function* allBitstrings(n: number): Generator<Array<0 | 1>> {
 function originalModel(s: FrozenScenario, a: QuboArtifact, x: ReadonlyArray<0 | 1>): number | null {
   const placed = new Map<string, string | null>();
   for (const d of s.draws) {
-    const on = a.symbol_table.filter((sym) => sym.draw_id === d.id && x[sym.index] === 1);
+    const on = a.symbols.filter((sym) => sym.draw_id === d.id && x[sym.index] === 1);
     if (on.length !== 1) return null;
-    placed.set(d.id, on[0].kind === 'z' ? null : on[0].window_id!);
+    placed.set(d.id, on[0].kind === 'deferral' ? null : on[0].window_id!);
   }
   const pos = new Map(s.windows.map((w, i) => [w.id, i]));
   for (const w of s.windows) {
@@ -146,15 +149,16 @@ describe('Mechanics §10 worked fragment — one draw, two windows', () => {
 
   it('prunes x[D1,T2] and reproduces the spec matrix exactly', () => {
     const a = compiled(scenario, policy);
-    expect(a.symbol_table.map((s) => s.name)).toEqual(['x[D1,T1]', 'z[D1]']);
-    expect(a.pruned_variables).toEqual([
-      { variable: 'x[D1,T2]', draw_id: 'D1', window_id: 'T2', reason: 'AMOUNT_EXCEEDS_WINDOW_CAP' },
-    ]);
-    expect(a.Q.diag).toEqual([-30, -12]);
-    expect(a.Q.offdiag).toEqual([[0, 1, 20]]);
+    expect(a.symbols.map((s) => s.name)).toEqual(['x[D1,T1]', 'z[D1]']);
+    expect(a.compile_report.pruned_variables).toEqual([{ name: 'x[D1,T2]', reason: 'amount_gt_window' }]);
+    expect(a.Q_diag).toEqual([-30, -12]);
+    expect(a.Q_offdiag).toEqual([{ i: 0, j: 1, q: 20 }]);
     expect(a.E0).toBe(20);
-    expect(a.report.delta_e_max).toBe(18);
-    expect(a.report.budget_encoding_by_window).toEqual({ T1: 'none', T2: 'none' });
+    expect(a.compile_report.penalty_terms).toEqual([
+      { constraint_id: 'card[D1]', P_c: 20, v_min2: 1, delta_E_max: 18, satisfied_floor: true },
+    ]);
+    expect(a.compile_report.diagnostics.budget_encoding_by_window).toEqual({ T1: 'none', T2: 'none' });
+    expect(a.one_hot_groups).toEqual([{ group_id: 'card[D1]', indices: [0, 1], cardinality: 'exactly_one' }]);
   });
 
   it('matches the spec energy table', () => {
@@ -174,13 +178,14 @@ describe('Mechanics §10 numeric slack compile — squared-linear expansion', ()
     qb.addLinear(x2, -3);
     qb.addSquaredLinear([[x1, 4], [x2, 3], [s0, 1], [s1, 2]], 5, 20);
     expect(qb.diag).toEqual([-485, -423, -180, -320]);
+    // Schema §9 minimal JSON shape: the same 2-draw slack compile.
     expect(qb.offdiag()).toEqual([
-      [0, 1, 240],
-      [0, 2, 80],
-      [0, 3, 160],
-      [1, 2, 60],
-      [1, 3, 120],
-      [2, 3, 40],
+      { i: 0, j: 1, q: 240 },
+      { i: 0, j: 2, q: 80 },
+      { i: 0, j: 3, q: 160 },
+      { i: 1, j: 2, q: 60 },
+      { i: 1, j: 3, q: 120 },
+      { i: 2, j: 3, q: 40 },
     ]);
     expect(qb.E0).toBe(500);
   });
@@ -192,9 +197,9 @@ describe('Memo §10 toy — 3 eligible draws × 3 windows, D4 excluded before co
 
   it('has 12 bits, not 16, and no slack', () => {
     expect(a.n).toBe(12);
-    expect(a.report.bits_by_kind).toEqual({ x: 9, z: 3, slack: 0 });
-    expect(a.symbol_table.some((sym) => sym.draw_id === 'D4')).toBe(false);
-    expect(a.report.budget_encoding_by_window).toEqual({ T1: 'pair_prune', T2: 'pair_prune', T3: 'pair_prune' });
+    expect(a.compile_report.diagnostics.bits_by_kind).toEqual({ decision: 9, deferral: 3, slack: 0, ancilla: 0 });
+    expect(a.symbols.some((sym) => sym.draw_id === 'D4')).toBe(false);
+    expect(a.compile_report.diagnostics.budget_encoding_by_window).toEqual({ T1: 'pair_prune', T2: 'pair_prune', T3: 'pair_prune' });
   });
 
   it('ground state is feasible and equals the true constrained optimum', () => {
@@ -214,7 +219,7 @@ describe('Memo §10 toy — 3 eligible draws × 3 windows, D4 excluded before co
   });
 
   it('kills the memo’s named infeasible schedules', () => {
-    const bit = (name: string) => a.symbol_table.find((sym) => sym.name === name)!.index;
+    const bit = (name: string) => a.symbols.find((sym) => sym.name === name)!.index;
     const make = (names: string[]) => {
       const x = new Array(a.n).fill(0) as Array<0 | 1>;
       names.forEach((nm) => (x[bit(nm)] = 1));
@@ -256,9 +261,12 @@ describe('budget that pair couplings cannot express falls back to slack', () => 
 
   it('uses gcd units so slack stays small: 500/100 → 3 bits', () => {
     const a = compiled(s);
-    expect(a.report.budget_encoding_by_window).toEqual({ W1: 'slack' });
-    expect(a.scale_factors.slack_unit_minor_by_window).toEqual({ W1: 10_000 });
-    expect(a.report.bits_by_kind).toEqual({ x: 3, z: 3, slack: 3 });
+    expect(a.compile_report.diagnostics.budget_encoding_by_window).toEqual({ W1: 'slack' });
+    expect(a.slack_groups).toEqual([
+      { group_id: 'slack[W1]', constraint_id: 'budget[W1]', indices: [6, 7, 8], max_value: 7, unit_minor: 10_000 },
+    ]);
+    expect(a.scale.amount_divisor).toBe(10_000);
+    expect(a.compile_report.diagnostics.bits_by_kind).toEqual({ decision: 3, deferral: 3, slack: 3, ancilla: 0 });
   });
 
   it('ground state is feasible and optimal; infeasible states sit above it', () => {
@@ -311,7 +319,7 @@ describe('refusals — REQUIRES_REMODELING, never a bigger penalty', () => {
     const low: PenaltyPolicy = { ...POLICY, penalties: { cardinality: 84, precedence: 100, budget: 100 } };
     expect(refusalCodes(toyScenario(), low)).toEqual(['PENALTY_BELOW_FLOOR']);
     const ok: PenaltyPolicy = { ...POLICY, penalties: { cardinality: 85, precedence: 85, budget: 85 } };
-    expect(compileQubo(toyScenario(), ok).status).toBe('COMPILED');
+    expect(compileQubo(toyScenario(), ok, OPTS).status).toBe('COMPILED');
   });
 
   it('refuses a scenario pinned to a different penalty policy', () => {
@@ -339,30 +347,74 @@ describe('artifact', () => {
     const a = compiled(toyScenario());
     const shuffled = toyScenario();
     shuffled.draws.reverse();
-    expect(compiled(shuffled).artifact_hash).toBe(a.artifact_hash);
-    expect(a.qubo_artifact_id).toBe(`qubo_${a.artifact_hash.slice(0, 16)}`);
+    expect(compiled(shuffled).payload_hash).toBe(a.payload_hash);
+    expect(a.qubo_artifact_id).toBe(artifactIdFromHash(a.payload_hash));
+    expect(a.qubo_artifact_id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
 
   it('pins the penalty policy: a changed penalty is a different artifact', () => {
     const a = compiled(toyScenario());
     const b = compiled(toyScenario(), { ...POLICY, penalties: { ...POLICY.penalties, budget: 101 } });
-    expect(b.artifact_hash).not.toBe(a.artifact_hash);
+    expect(b.penalty_policy_hash).not.toBe(a.penalty_policy_hash);
+    expect(b.payload_hash).not.toBe(a.payload_hash);
+    expect(b.qubo_artifact_id).not.toBe(a.qubo_artifact_id);
   });
 
   it('carries frozen provenance and is not shaped like a draw or settlement', () => {
     const a = compiled(toyScenario());
     expect(a).toMatchObject({
-      kind: 'DIBS_QLAB_QUBO_ARTIFACT',
+      schema_version: 'qlab.qubo_artifact.v1',
+      artifact_version: 'qubo_artifact/v1',
+      created_at: '2026-09-25T06:00:00Z',
+      idempotency_key: 'compile-toy-1',
       scenario_id: 'scn-toy-001',
-      policy_version_frozen: 'policy-2026.09.19',
+      locked_policy_version: 'policy-2026.09.19',
+      locked_evidence_manifest_hash: 'sha256:toy',
       penalty_policy_id: 'pp-toy-v1',
       q_layout: 'symmetric_xTQx',
-      spin_map: 'z=1-2x',
+      ising_map: 'z = 1 - 2x',
+      Q_format: 'diag_plus_coo',
+      coefficient_unit: 'dimensionless',
+      classical_baseline_id: null,
     });
     for (const k of ['status', 'amount_approved_minor', 'payee_bank_account_id', 'draw_request_id', 'settlement_reference']) {
       expect(a).not.toHaveProperty(k);
     }
-    expect(a.refused_constraints).toContain('sanctions');
+    expect(a.compile_report.refused_constraints.map((r) => r.constraint_id)).toContain('sanctions');
+    expect(a.uncompiled_hard.map((u) => u.code).sort()).toEqual(['CONCENTRATION', 'LEGAL', 'LTV', 'RESERVE']);
+  });
+});
+
+describe('qlab.qubo_artifact.v1 envelope and compile report', () => {
+  it('records what pre-filter removed, and refuses a pre-filtered draw still in the IR', () => {
+    const a = compileQubo(toyScenario(), POLICY, { ...OPTS, prefiltered_draws: [{ draw_id: 'D4', reason: 'hold' }] });
+    expect(a.status).toBe('COMPILED');
+    if (a.status === 'COMPILED') expect(a.artifact.compile_report.prefiltered_draws).toEqual([{ draw_id: 'D4', reason: 'hold' }]);
+    const bad = compileQubo(toyScenario(), POLICY, { ...OPTS, prefiltered_draws: [{ draw_id: 'D1', reason: 'hold' }] });
+    expect(bad.status === 'REQUIRES_REMODELING' && bad.refusals.map((r) => r.code)).toEqual(['LEGAL_FLAG_IN_IR']);
+  });
+
+  it('lists every tranche-forbidden and over-cap pair it coupled', () => {
+    const a = compiled(toyScenario());
+    const pairs = a.compile_report.pruned_pairs;
+    expect(pairs).toContainEqual({ left_symbol: 'x[D1,T2]', right_symbol: 'x[D2,T1]', reason: 'tranche_forbid' });
+    expect(pairs).toContainEqual({ left_symbol: 'x[D1,T1]', right_symbol: 'x[D3,T1]', reason: 'budget_pair' });
+  });
+
+  it('needs caller-supplied created_at (UTC) and idempotency_key; a new created_at is a new artifact', () => {
+    const bad = compileQubo(toyScenario(), POLICY, { created_at: '2026-09-25 06:00', idempotency_key: '' });
+    expect(bad.status === 'REQUIRES_REMODELING' && bad.refusals.map((r) => r.code)).toEqual(['INVALID_OPTIONS', 'INVALID_OPTIONS']);
+    const a = compiled(toyScenario());
+    const r = compileQubo(toyScenario(), POLICY, { ...OPTS, created_at: '2026-09-25T06:00:01Z' });
+    expect(r.status === 'COMPILED' && r.artifact.qubo_artifact_id).not.toBe(a.qubo_artifact_id);
+  });
+
+  it('pins every hash the validator will recompute', () => {
+    const a = compiled(toyScenario());
+    for (const k of ['scenario_freeze_hash', 'penalty_policy_hash', 'symbol_table_hash', 'compile_report_hash', 'q_payload_hash', 'payload_hash'] as const) {
+      expect(a[k]).toMatch(/^[0-9a-f]{64}$/);
+    }
+    expect(a.signature).toBeUndefined();
   });
 });
 

@@ -83,83 +83,181 @@ export interface PenaltyPolicy {
 }
 
 // ---------------------------------------------------------------------------
-// Outputs
+// Outputs — qlab.qubo_artifact.v1 (docs/quantum-lab/DIBS-QUBO-Artifact-Structure.md)
 // ---------------------------------------------------------------------------
 
-export type SymbolKind = 'x' | 'z' | 'slack';
+export const SCHEMA_VERSION = 'qlab.qubo_artifact.v1';
+export const ARTIFACT_VERSION = 'qubo_artifact/v1';
+export const COMPILER_VERSION = 'qlab-compiler/1';
 
+export type SymbolKind = 'decision' | 'deferral' | 'slack' | 'ancilla';
+export type SymbolRole = 'draw_window' | 'reserve_band' | 'spv_slice' | 'slack_bit' | 'rosenberg_ancilla';
+
+/** Every nullable field is always present, so the canonical hash is stable. */
 export interface SymbolEntry {
   index: number;
   name: string;
   kind: SymbolKind;
-  draw_id?: string;
-  window_id?: string;
-  /** Slack only: bit position b, weight 2^b in window amount units. */
-  bit?: number;
+  role: SymbolRole;
+  draw_id: string | null;
+  window_id: string | null;
+  spv_id: string | null;
+  band_id: string | null;
+  slack_group: string | null;
+  slack_weight: number | null;
 }
 
-/** Off-diagonal entry of a symmetric matrix: M[i][j] = M[j][i] = value, i < j. */
-export type SymEntry = [number, number, number];
+export interface OneHotGroup {
+  group_id: string;
+  indices: number[];
+  cardinality: 'exactly_one' | 'at_most_one';
+}
 
-export interface ConstraintRecord {
-  id: string;
-  kind: 'cardinality' | 'precedence' | 'budget_pair' | 'budget_slack';
-  penalty: number;
-  /** Conservative bound on economic gain from violating any constraint. */
-  delta_e_max: number;
-  /** Smallest nonzero value of g_c. Every v1 encoding has integer g_c, so 1. */
-  v_min: number;
-  bits: number[];
+export interface SlackGroup {
+  group_id: string;
+  constraint_id: string;
+  indices: number[];
+  /** Σ slack_weight over the group. */
+  max_value: number;
+  /** Additive: minor units per slack step for this constraint. */
+  unit_minor: number;
+}
+
+export interface QOffDiag {
+  i: number;
+  j: number;
+  /** Stored Q_ij = Q_ji, i < j. */
+  q: number;
+}
+
+export interface JEntry {
+  i: number;
+  j: number;
+  value: number;
+}
+
+export interface PrefilteredDraw {
+  draw_id: string;
+  reason: 'hold' | 'unverified_payee' | 'sanctions' | 'kyc' | 'docs' | 'settlement_unavailable';
 }
 
 export interface PrunedVariable {
-  variable: string;
-  draw_id: string;
-  window_id: string;
-  reason: 'AMOUNT_EXCEEDS_WINDOW_CAP' | 'WINDOW_NOT_ELIGIBLE';
+  name: string;
+  reason: 'amount_gt_window' | 'infeasible_pair' | 'domain_empty';
+}
+
+export interface PrunedPair {
+  left_symbol: string;
+  right_symbol: string;
+  reason: 'budget_pair' | 'tranche_forbid';
+}
+
+export interface RefusedConstraint {
+  constraint_id: string;
+  reason: 'legal_not_compiled' | 'cubic_leftover' | 'uncalibrated_penalty';
+}
+
+export interface PenaltyTerm {
+  constraint_id: string;
+  P_c: number;
+  v_min2: number;
+  delta_E_max: number;
+  satisfied_floor: boolean;
+}
+
+export interface UncompiledHard {
+  code: 'LTV' | 'RESERVE' | 'CONCENTRATION' | 'LEGAL';
+  reason: 'validator_only' | 'prefilter';
+}
+
+export interface CompileReport {
+  prefiltered_draws: PrefilteredDraw[];
+  pruned_variables: PrunedVariable[];
+  pruned_pairs: PrunedPair[];
+  refused_constraints: RefusedConstraint[];
+  penalty_terms: PenaltyTerm[];
+  fixture: { solved_exactly: boolean; feasibility_rate: number | null; gap_to_mip: number | null };
+  warnings: string[];
+  /** Additive diagnostics. */
+  diagnostics: {
+    bits_by_kind: Record<SymbolKind, number>;
+    budget_encoding_by_window: Record<string, 'none' | 'pair_prune' | 'slack'>;
+  };
 }
 
 export interface QuboArtifact {
-  kind: 'DIBS_QLAB_QUBO_ARTIFACT';
+  // 1. Envelope
   qubo_artifact_id: string;
-  scenario_id: string;
-  /** Content hash of the normalized FrozenScenario (see scenario.ts). */
-  scenario_hash: string;
-  policy_version_frozen: string;
-  manifest_hash_frozen: string;
+  schema_version: typeof SCHEMA_VERSION;
+  artifact_version: typeof ARTIFACT_VERSION;
+  experiment_id: string | null;
+  created_at: string;
+  compiler_version: string;
   encoding_version: string;
-  penalty_policy_id: string;
+  idempotency_key: string;
   q_layout: 'symmetric_xTQx';
-  spin_map: 'z=1-2x';
-  n: number;
-  symbol_table: SymbolEntry[];
-  /** canonicalHash(symbol_table); the validator refuses to decode if it does not match. */
+  ising_map: 'z = 1 - 2x';
+
+  // 2. Identity bindings
+  scenario_id: string;
+  scenario_freeze_hash: string;
+  locked_policy_version: string;
+  locked_evidence_manifest_hash: string;
+  penalty_policy_id: string;
+  penalty_policy_hash: string;
+  classical_baseline_id: string | null;
+  classical_baseline_hash: string | null;
   symbol_table_hash: string;
-  /** E(x) = Σ diag[i]·x_i + Σ_{i<j} 2·Q_ij·x_i·x_j + E0, in integer cost units. */
-  Q: { diag: number[]; offdiag: SymEntry[] };
+
+  // 3. Symbol table
+  n: number;
+  symbols: SymbolEntry[];
+  one_hot_groups: OneHotGroup[];
+  slack_groups: SlackGroup[];
+
+  // 4. Q payload. E(x) = Σ Q_diag[i]·x_i + Σ_{i<j} 2·q·x_i·x_j + E0
   E0: number;
-  ising: { h: number[]; J: SymEntry[]; offset: number };
-  scale_factors: {
-    /** Divide Q, E0, h, J, offset by this for an O(1) solver input. Energy is not money. */
-    energy_scale: number;
-    /** Per slack-encoded window: minor units per slack step (gcd of amounts and cap). */
-    slack_unit_minor_by_window: Record<string, number>;
+  Q_format: 'diag_plus_coo';
+  Q_diag: number[];
+  Q_offdiag: QOffDiag[];
+  scale: {
+    /** gcd of slack units (1 when no slack): minor units per scaled amount step. */
+    amount_divisor: number;
+    /** Coefficients are exact integers or halves in policy cost units; no division applied. */
+    objective_divisor: number;
+    rounding: 'nearest_even';
+    reconstructed_unit: 'minor_units';
   };
-  constraints: ConstraintRecord[];
-  pruned_variables: PrunedVariable[];
-  /** Constraint classes deliberately not encoded — enforced by pre-filter and validator. */
-  refused_constraints: string[];
-  report: {
-    bits: number;
-    bits_by_kind: Record<SymbolKind, number>;
-    nonzero_offdiag: number;
-    density: number;
-    bandwidth: number;
-    delta_e_max: number;
-    budget_encoding_by_window: Record<string, 'none' | 'pair_prune' | 'slack'>;
-  };
-  classical_baseline_ref: string | null;
-  artifact_hash: string;
+  coefficient_unit: 'dimensionless';
+  density: number;
+  bandwidth: number;
+
+  // 5. Ising image, same bits, z = 1 − 2x
+  h: number[];
+  J_sparse: JEntry[];
+  energy_shift: number;
+
+  // 6. Compile report
+  compile_report: CompileReport;
+  compile_report_hash: string;
+  uncompiled_hard: UncompiledHard[];
+
+  // 7. Integrity
+  q_payload_hash: string;
+  payload_hash: string;
+  signature_key_id?: string;
+  signature?: string;
+}
+
+/** Caller-supplied envelope inputs. Nothing here is read from a clock or RNG. */
+export interface CompileOptions {
+  /** UTC, ISO-8601 ending in Z. */
+  created_at: string;
+  idempotency_key: string;
+  experiment_id?: string | null;
+  /** What pre-filter removed before this IR, for the compile report. */
+  prefiltered_draws?: PrefilteredDraw[];
+  classical_baseline?: { id: string; hash: string };
 }
 
 export type RefusalCode =
@@ -178,7 +276,8 @@ export type RefusalCode =
   | 'INVALID_PENALTY_POLICY'
   | 'PENALTY_BELOW_FLOOR'
   | 'SLACK_BITS_EXCEED_POLICY'
-  | 'NUMERIC_RANGE';
+  | 'NUMERIC_RANGE'
+  | 'INVALID_OPTIONS';
 
 export interface Refusal {
   code: RefusalCode;

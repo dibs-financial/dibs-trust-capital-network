@@ -7,10 +7,12 @@
  * Spec: docs/quantum-lab/DIBS-Independent-Validator-Logic.md
  */
 
-import { FrozenScenario, QuboArtifact } from '../qubo/types';
+import { KeyObject } from 'crypto';
+import { FrozenScenario, PenaltyPolicy, QuboArtifact } from '../qubo/types';
 
 export const VALIDATOR_VERSION = 'validator/v1';
 export const SUPPORTED_ENCODINGS = ['draw-window/v1'];
+export const SUPPORTED_SCHEMAS = ['qlab.qubo_artifact.v1'];
 
 // ---------------------------------------------------------------------------
 // Frozen book: the compiler IR plus everything the compiler never saw
@@ -84,10 +86,12 @@ export interface FrozenBook {
   stresses: StressSpec[];
 }
 
+/** MIP result on the same freeze. Its canonical hash is pinned on the artifact. */
 export interface ClassicalBaseline {
+  baseline_id: string;
   objective_minor: number;
-  /** Research acceptance bar; exceeding it rejects the candidate. */
-  max_gap_bps?: number;
+  /** draw id → window id, or null when deferred. */
+  assignment: Record<string, string | null>;
 }
 
 export interface ValidationRequest {
@@ -95,8 +99,13 @@ export interface ValidationRequest {
   artifact: QuboArtifact;
   bitstring: { encoding: 'bits' | 'spins'; values: number[] };
   book: FrozenBook;
-  declared_penalty_policy_id: string;
+  /** The penalty policy body; its id and hash must match the artifact. */
+  penalty_policy: PenaltyPolicy;
   classical_baseline?: ClassicalBaseline;
+  /** Research acceptance bar on gap to the baseline; exceeding it rejects the candidate. */
+  max_gap_bps?: number;
+  /** When set, the artifact must carry a valid compiler signature under this key. */
+  compiler_public_key?: KeyObject;
   /** UTC, ISO-8601 with Z. Supplied by the caller so the report is reproducible. */
   occurred_at: string;
 }
@@ -144,6 +153,7 @@ export interface ValidationReport {
   /** Codes that decided the verdict. */
   verdict_reasons: string[];
   scenario_freeze_hash: string;
+  qubo_artifact_id: string;
   compile_artifact_hash: string;
   symbol_table_hash: string;
   penalty_policy_id: string;
