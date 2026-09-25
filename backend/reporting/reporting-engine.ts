@@ -9,8 +9,23 @@
  * Export formats: JSON (default), CSV (tabular reports)
  */
 
-import { EventStore, ImmutableEvent } from '../audit/event-store';
+import { EventStore, EventType, ImmutableEvent } from '../audit/event-store';
 import { VRDCTAdapter } from '../adapters/vrdct-adapter';
+
+// CAPITAL_REQUEST_* and SETTLEMENT_* are aliases of DRAW_* event strings in the
+// event store, so match on enum values rather than string prefixes.
+const CAPITAL_REQUEST_TYPES = new Set<string>([
+  EventType.CAPITAL_REQUEST_CREATED,
+  EventType.CAPITAL_REQUEST_APPROVED,
+  EventType.CAPITAL_REQUEST_HELD,
+  EventType.CAPITAL_REQUEST_REJECTED,
+  EventType.CAPITAL_REQUEST_ESCALATED,
+]);
+const SETTLEMENT_TYPES = new Set<string>([
+  EventType.SETTLEMENT_INSTRUCTION_SENT,
+  EventType.SETTLEMENT_CONFIRMED,
+  EventType.SETTLEMENT_EXCEPTION,
+]);
 
 export type ReportType =
   | 'draw_summary'
@@ -85,19 +100,19 @@ export class ReportingEngine {
   private async generateDrawSummary(params: ReportParams): Promise<Report> {
     const events = await this.eventStore.getByTenant(params.tenantId);
     const capitalEvents = events.filter(e =>
-      e.eventType.startsWith('CAPITAL_REQUEST') || e.eventType.startsWith('RELEASE')
+      CAPITAL_REQUEST_TYPES.has(String(e.eventType)) || e.eventType.startsWith('RELEASE')
     );
 
-    const approved = capitalEvents.filter(e => e.eventType === 'CAPITAL_REQUEST_APPROVED').length;
-    const held = capitalEvents.filter(e => e.eventType === 'CAPITAL_REQUEST_HELD').length;
-    const rejected = capitalEvents.filter(e => e.eventType === 'CAPITAL_REQUEST_REJECTED').length;
+    const approved = capitalEvents.filter(e => e.eventType === EventType.CAPITAL_REQUEST_APPROVED).length;
+    const held = capitalEvents.filter(e => e.eventType === EventType.CAPITAL_REQUEST_HELD).length;
+    const rejected = capitalEvents.filter(e => e.eventType === EventType.CAPITAL_REQUEST_REJECTED).length;
 
     return {
       reportId: `rpt_${Date.now()}`,
       reportType: 'draw_summary',
       generatedAt: new Date().toISOString(),
       params,
-      data: capitalEvents.map(e => ({ ...e.metadata, timestamp: e.timestamp, eventType: e.eventType })),
+      data: capitalEvents.map(e => ({ ...e.payload, timestamp: e.occurredAt, eventType: e.eventType })),
       summary: { total: capitalEvents.length, approved, held, rejected },
     };
   }
@@ -118,7 +133,7 @@ export class ReportingEngine {
       reportType: 'covenant_status',
       generatedAt: new Date().toISOString(),
       params,
-      data: covenantEvents.map(e => ({ ...e.metadata, timestamp: e.timestamp, eventType: e.eventType })),
+      data: covenantEvents.map(e => ({ ...e.payload, timestamp: e.occurredAt, eventType: e.eventType })),
       summary: { total: covenantEvents.length, compliant, warnings, breached },
     };
   }
@@ -135,7 +150,7 @@ export class ReportingEngine {
       reportType: 'collateral_health',
       generatedAt: new Date().toISOString(),
       params,
-      data: collateralEvents.map(e => ({ ...e.metadata, timestamp: e.timestamp, eventType: e.eventType })),
+      data: collateralEvents.map(e => ({ ...e.payload, timestamp: e.occurredAt, eventType: e.eventType })),
       summary: { totalFlags: collateralEvents.length },
     };
   }
@@ -157,7 +172,7 @@ export class ReportingEngine {
       reportType: 'tranche_nav',
       generatedAt: new Date().toISOString(),
       params,
-      data: trancheEvents.map(e => ({ ...e.metadata, timestamp: e.timestamp, eventType: e.eventType })),
+      data: trancheEvents.map(e => ({ ...e.payload, timestamp: e.occurredAt, eventType: e.eventType })),
       summary: { totalEvents: trancheEvents.length },
     };
   }
@@ -174,7 +189,7 @@ export class ReportingEngine {
       reportType: 'reserve_health',
       generatedAt: new Date().toISOString(),
       params,
-      data: reserveEvents.map(e => ({ ...e.metadata, timestamp: e.timestamp, eventType: e.eventType })),
+      data: reserveEvents.map(e => ({ ...e.payload, timestamp: e.occurredAt, eventType: e.eventType })),
       summary: { totalReleases: reserveEvents.length },
     };
   }
@@ -196,7 +211,7 @@ export class ReportingEngine {
       reportType: 'covenant_breach_log',
       generatedAt: new Date().toISOString(),
       params,
-      data: breachEvents.map(e => ({ ...e.metadata, timestamp: e.timestamp, eventType: e.eventType })),
+      data: breachEvents.map(e => ({ ...e.payload, timestamp: e.occurredAt, eventType: e.eventType })),
       summary: {
         breaches: breachEvents.filter(e => e.eventType === 'COVENANT_BREACHED').length,
         cures: breachEvents.filter(e => e.eventType === 'COVENANT_CURE_ENTERED').length,
@@ -211,14 +226,14 @@ export class ReportingEngine {
    */
   private async generateCapitalRequestLog(params: ReportParams): Promise<Report> {
     const events = await this.eventStore.getByTenant(params.tenantId);
-    const requestEvents = events.filter(e => e.eventType.startsWith('CAPITAL_REQUEST'));
+    const requestEvents = events.filter(e => CAPITAL_REQUEST_TYPES.has(String(e.eventType)));
 
     return {
       reportId: `rpt_${Date.now()}`,
       reportType: 'capital_request_log',
       generatedAt: new Date().toISOString(),
       params,
-      data: requestEvents.map(e => ({ ...e.metadata, timestamp: e.timestamp, eventType: e.eventType, actorId: e.actorId, actorRole: e.actorRole })),
+      data: requestEvents.map(e => ({ ...e.payload, timestamp: e.occurredAt, eventType: e.eventType, actorId: e.actorId, actorRole: e.actorRole })),
       summary: { total: requestEvents.length },
     };
   }
@@ -228,18 +243,18 @@ export class ReportingEngine {
    */
   private async generateSettlementReconciliation(params: ReportParams): Promise<Report> {
     const events = await this.eventStore.getByTenant(params.tenantId);
-    const settlementEvents = events.filter(e => e.eventType.startsWith('SETTLEMENT'));
+    const settlementEvents = events.filter(e => SETTLEMENT_TYPES.has(String(e.eventType)));
 
-    const sent = settlementEvents.filter(e => e.eventType === 'SETTLEMENT_INSTRUCTION_SENT').length;
-    const confirmed = settlementEvents.filter(e => e.eventType === 'SETTLEMENT_CONFIRMED').length;
-    const exceptions = settlementEvents.filter(e => e.eventType === 'SETTLEMENT_EXCEPTION').length;
+    const sent = settlementEvents.filter(e => e.eventType === EventType.SETTLEMENT_INSTRUCTION_SENT).length;
+    const confirmed = settlementEvents.filter(e => e.eventType === EventType.SETTLEMENT_CONFIRMED).length;
+    const exceptions = settlementEvents.filter(e => e.eventType === EventType.SETTLEMENT_EXCEPTION).length;
 
     return {
       reportId: `rpt_${Date.now()}`,
       reportType: 'settlement_reconciliation',
       generatedAt: new Date().toISOString(),
       params,
-      data: settlementEvents.map(e => ({ ...e.metadata, timestamp: e.timestamp, eventType: e.eventType })),
+      data: settlementEvents.map(e => ({ ...e.payload, timestamp: e.occurredAt, eventType: e.eventType })),
       summary: { sent, confirmed, exceptions, matchRate: sent > 0 ? confirmed / sent : 0 },
     };
   }
@@ -285,7 +300,7 @@ export class ReportingEngine {
       reportType: 'policy_compliance_audit',
       generatedAt: new Date().toISOString(),
       params,
-      data: authEvents.map(e => ({ ...e.metadata, timestamp: e.timestamp, eventType: e.eventType, actorId: e.actorId, actorRole: e.actorRole, policyVersion: e.policyVersion })),
+      data: authEvents.map(e => ({ ...e.payload, timestamp: e.occurredAt, eventType: e.eventType, actorId: e.actorId, actorRole: e.actorRole, policyVersion: e.policyVersion })),
       summary: { totalEvents: authEvents.length },
     };
   }
@@ -305,7 +320,7 @@ export class ReportingEngine {
     const events = await this.eventStore.getByTenant(tenantId, 0, 100);
 
     return {
-      capitalRequests: events.filter(e => e.eventType.startsWith('CAPITAL_REQUEST')).length,
+      capitalRequests: events.filter(e => CAPITAL_REQUEST_TYPES.has(String(e.eventType))).length,
       covenants: events.filter(e => e.eventType.startsWith('COVENANT')).length,
       collateralFlags: events.filter(e => e.eventType.startsWith('COLLATERAL')).length,
       trancheEvents: events.filter(e =>
@@ -313,7 +328,7 @@ export class ReportingEngine {
         e.eventType.startsWith('RESERVE') ||
         e.eventType.startsWith('DISTRIBUTION')
       ).length,
-      settlementEvents: events.filter(e => e.eventType.startsWith('SETTLEMENT')).length,
+      settlementEvents: events.filter(e => SETTLEMENT_TYPES.has(String(e.eventType))).length,
       authorizationEvents: events.filter(e => e.eventType.startsWith('AUTHORIZATION')).length,
       recentEvents: events.slice(0, 20),
     };
