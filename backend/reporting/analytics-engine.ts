@@ -15,8 +15,18 @@
  * 8. Portfolio Analytics — concentration, leverage, duration, liquidity
  */
 
-import { EventStore, ImmutableEvent } from '../audit/event-store';
+import { EventStore, EventType, ImmutableEvent } from '../audit/event-store';
 import { calculateJuniorRatio, calculateRAYE, calculateLTV, calculateDSCR } from '../../shared/formulas';
+
+// CAPITAL_REQUEST_* are aliases of DRAW_* event strings in the
+// event store, so match on enum values rather than string prefixes.
+const CAPITAL_REQUEST_TYPES = new Set<string>([
+  EventType.CAPITAL_REQUEST_CREATED,
+  EventType.CAPITAL_REQUEST_APPROVED,
+  EventType.CAPITAL_REQUEST_HELD,
+  EventType.CAPITAL_REQUEST_REJECTED,
+  EventType.CAPITAL_REQUEST_ESCALATED,
+]);
 
 export interface AnalyticsTimeRange {
   from: string;
@@ -197,10 +207,10 @@ export class AnalyticsEngine {
     for (let i = 0; i < preservationTriggers.length; i++) {
       const trigger = preservationTriggers[i];
       const lift = preservationLifts.find(l =>
-        new Date(l.timestamp) > new Date(trigger.timestamp)
+        new Date(l.occurredAt) > new Date(trigger.occurredAt)
       );
       if (lift) {
-        preservationDurationHours += (new Date(lift.timestamp).getTime() - new Date(trigger.timestamp).getTime()) / (1000 * 60 * 60);
+        preservationDurationHours += (new Date(lift.occurredAt).getTime() - new Date(trigger.occurredAt).getTime()) / (1000 * 60 * 60);
       }
     }
 
@@ -253,7 +263,7 @@ export class AnalyticsEngine {
     // Category frequency
     const categoryCounts = new Map<string, number>();
     breaches.forEach(e => {
-      const cat = (e.metadata as any)?.covenantId || 'unknown';
+      const cat = (e.payload as any)?.covenantId || 'unknown';
       categoryCounts.set(cat, (categoryCounts.get(cat) || 0) + 1);
     });
 
@@ -283,13 +293,13 @@ export class AnalyticsEngine {
     const collateralEvents = this.filterByRange(events.filter(e => e.eventType.startsWith('COLLATERAL')), range);
 
     const lienFlags = collateralEvents.filter(e =>
-      JSON.stringify(e.metadata).toLowerCase().includes('lien')
+      JSON.stringify(e.payload).toLowerCase().includes('lien')
     ).length;
     const titleFlags = collateralEvents.filter(e =>
-      JSON.stringify(e.metadata).toLowerCase().includes('title')
+      JSON.stringify(e.payload).toLowerCase().includes('title')
     ).length;
     const insuranceFlags = collateralEvents.filter(e =>
-      JSON.stringify(e.metadata).toLowerCase().includes('insurance')
+      JSON.stringify(e.payload).toLowerCase().includes('insurance')
     ).length;
 
     return {
@@ -307,33 +317,33 @@ export class AnalyticsEngine {
 
   private analyzeCapitalFlow(events: ImmutableEvent[], range?: AnalyticsTimeRange): CapitalFlowAnalytics {
     const capitalEvents = this.filterByRange(events.filter(e =>
-      e.eventType.startsWith('CAPITAL_REQUEST') || e.eventType.startsWith('RELEASE')
+      CAPITAL_REQUEST_TYPES.has(String(e.eventType)) || e.eventType.startsWith('RELEASE')
     ), range);
 
-    const approved = capitalEvents.filter(e => e.eventType === 'CAPITAL_REQUEST_APPROVED').length;
-    const held = capitalEvents.filter(e => e.eventType === 'CAPITAL_REQUEST_HELD').length;
-    const rejected = capitalEvents.filter(e => e.eventType === 'CAPITAL_REQUEST_REJECTED').length;
-    const escalated = capitalEvents.filter(e => e.eventType === 'CAPITAL_REQUEST_ESCALATED').length;
+    const approved = capitalEvents.filter(e => e.eventType === EventType.CAPITAL_REQUEST_APPROVED).length;
+    const held = capitalEvents.filter(e => e.eventType === EventType.CAPITAL_REQUEST_HELD).length;
+    const rejected = capitalEvents.filter(e => e.eventType === EventType.CAPITAL_REQUEST_REJECTED).length;
+    const escalated = capitalEvents.filter(e => e.eventType === EventType.CAPITAL_REQUEST_ESCALATED).length;
     const total = capitalEvents.length || 1;
 
     // Hold/reject reason aggregation
     const holdReasons = new Map<string, number>();
-    capitalEvents.filter(e => e.eventType === 'CAPITAL_REQUEST_HELD').forEach(e => {
-      const reason = (e.metadata as any)?.holdReason || 'unknown';
+    capitalEvents.filter(e => e.eventType === EventType.CAPITAL_REQUEST_HELD).forEach(e => {
+      const reason = (e.payload as any)?.holdReason || 'unknown';
       holdReasons.set(reason, (holdReasons.get(reason) || 0) + 1);
     });
 
     const rejectReasons = new Map<string, number>();
-    capitalEvents.filter(e => e.eventType === 'CAPITAL_REQUEST_REJECTED').forEach(e => {
-      const reason = (e.metadata as any)?.failureReason || 'unknown';
+    capitalEvents.filter(e => e.eventType === EventType.CAPITAL_REQUEST_REJECTED).forEach(e => {
+      const reason = (e.payload as any)?.failureReason || 'unknown';
       rejectReasons.set(reason, (rejectReasons.get(reason) || 0) + 1);
     });
 
     // Draw category distribution
     const categoryAmounts = new Map<string, { count: number; totalAmount: number }>();
     capitalEvents.forEach(e => {
-      const cat = (e.metadata as any)?.drawCategory || 'unknown';
-      const amount = (e.metadata as any)?.amount || 0;
+      const cat = (e.payload as any)?.drawCategory || 'unknown';
+      const amount = (e.payload as any)?.amount || 0;
       const existing = categoryAmounts.get(cat) || { count: 0, totalAmount: 0 };
       existing.count++;
       existing.totalAmount += amount;
@@ -415,7 +425,7 @@ export class AnalyticsEngine {
   private filterByRange(events: ImmutableEvent[], range?: AnalyticsTimeRange): ImmutableEvent[] {
     if (!range) return events;
     return events.filter(e => {
-      const ts = new Date(e.timestamp);
+      const ts = new Date(e.occurredAt);
       return ts >= new Date(range.from) && ts <= new Date(range.to);
     });
   }

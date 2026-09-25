@@ -86,6 +86,19 @@ export enum EventType {
   CAPITAL_REQUEST_HELD = 'DRAW_HELD',
   CAPITAL_REQUEST_REJECTED = 'DRAW_REJECTED',
   CAPITAL_REQUEST_ESCALATED = 'DRAW_ESCALATED',
+
+  // Legacy event types still emitted by evidence, collateral, waiver and
+  // tranche code. Kept at their original string values because reporting and
+  // analytics filter on those strings. Not yet mapped to the domain event model.
+  EVIDENCE_SUBMITTED = 'EVIDENCE_SUBMITTED',
+  EVIDENCE_VALIDATED = 'EVIDENCE_VALIDATED',
+  EVIDENCE_FLAGGED = 'EVIDENCE_FLAGGED',
+  EVIDENCE_EXPIRED = 'EVIDENCE_EXPIRED',
+  RELEASE_HOLD = 'RELEASE_HOLD',
+  COVENANT_WAIVED = 'COVENANT_WAIVED',
+  COLLATERAL_FLAGGED = 'COLLATERAL_FLAGGED',
+  COLLATERAL_REINSPECT_REQUIRED = 'COLLATERAL_REINSPECT_REQUIRED',
+  CAPITAL_PRESERVATION_TRIGGERED = 'CAPITAL_PRESERVATION_TRIGGERED',
 }
 
 export interface AuditEvent {
