@@ -32,6 +32,36 @@ A validated candidate can become a policy simulation. It cannot become a `DrawRe
 
 Legal / KYC / sanctions / missing docs / open holds are stripped **before** compile. They are not soft penalties QAOA can buy.
 
+## Compiler contract
+
+```text
+FrozenScenario + PenaltyPolicy  →  (Q, symbol table, compile report)
+```
+
+The compiler is a pure, deterministic function. Same inputs, same outputs, byte for byte. It performs no network calls, does not read live `policyVersion`, and cannot write Autopilot state.
+
+**Inputs**
+
+| Input | Contents |
+| :-- | :-- |
+| `FrozenScenario` | Snapshot ID and content hash. Draws that already pass Autopilot eligibility, with amounts $a_i$ as integer minor units. Windows $T$ and liquidity caps $L_t$ from the classical cash ladder. Precedence pairs. Crowding / concentration weights $c_{ij}$, $\kappa_{ss'}$. Exposure caps $E_s^{\max}$. Reserve bands $R_k$. Excluded items, each with a reason code. |
+| `PenaltyPolicy` | Versioned. $P_c$ for each hard constraint in $H$, and $w_s$ for each soft preference in $S$. |
+
+**Outputs**
+
+| Output | Contents |
+| :-- | :-- |
+| `Q` | QUBO matrix (upper-triangular) plus constant offset, so $E(x)=x^\top Q x + \text{offset}$. |
+| Symbol table | Bit index → decision variable ($x_{i,t}$, $z_i$, $y_s$, $r_k$), with the source draw / SPV / window / band ID. The validator uses it to decode a bitstring back into a schedule. |
+| Compile report | Input hashes and the `PenaltyPolicy` version. Bit count, density of $Q$, slack / one-hot overhead. Money scaling factor. Excluded items and reason codes. The penalty-floor check for each $c \in H$. |
+
+**Rules**
+
+- A draw on hold, awaiting information, failing sanctions, or with an unverified payee gets no bit. It appears in the compile report as excluded, never in `Q`.
+- If any $P_c$ is below $\Delta E_{\max}/v_{\min}^2$, the compile fails. The compiler does not silently raise the penalty.
+- `Q` is advisory input to a solver. The validator never trusts it: it re-checks decoded candidates against the original full-precision `FrozenScenario`.
+- Worked toy: 4 requested draws, D4 on hold, 3 windows → 12 bits ($x_{i,t}$ for $i\in\{1,2,3\}$, $t\in\{1,2,3\}$, plus $z_1,z_2,z_3$). D4 is listed in the report as excluded.
+
 ## Energy
 
 $$
