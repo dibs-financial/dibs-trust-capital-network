@@ -211,8 +211,8 @@ $$
 Do not encode “time indices” as integers on qubits. Enumerate forbidden pairs and penalize them:
 
 $$
-g_{\text{tr}}=\sum_{t'\le t}x_{j,t}\,x_{i,t'}
-\quad\text{(j earlier than or tied with i)}
+g_{\text{tr}}=\sum_{t'\ge t}x_{j,t}\,x_{i,t'}
+\quad\text{(j in the same window as i, or an earlier one)}
 $$
 
 Each forbidden pair is already quadratic. \(P_{\text{tr}}\) on those \(Q\) entries. If both may be deferred, do not penalize \((z_i,z_j)\).
