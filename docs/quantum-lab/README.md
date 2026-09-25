@@ -4,6 +4,8 @@ The Quantum Optimization Lab is a **scenario engine, not a capital engine**. It 
 
 Full memo: [DIBS-Quantum-Lab-Optimization-Exploration.md](./DIBS-Quantum-Lab-Optimization-Exploration.md)
 
+Compiler mechanics: [DIBS-QUBO-Compiler-Mechanics.md](./DIBS-QUBO-Compiler-Mechanics.md) · Implementation: [`packages/quantum-lab/qubo/`](../../packages/quantum-lab/qubo/)
+
 ## What it is allowed to do
 
 Autopilot answers whether *this* draw may be instructed. The lab answers the portfolio-shaped questions around that gate:
@@ -51,7 +53,7 @@ The compiler is a pure, deterministic function. Same inputs, same outputs, byte 
 
 | Output | Contents |
 | :-- | :-- |
-| `Q` | QUBO matrix (upper-triangular) plus constant offset, so $E(x)=x^\top Q x + \text{offset}$. |
+| `Q` | Symmetric QUBO matrix plus constant $E_0$, so $E(x)=x^\top Q x + E_0$ (`q_layout = symmetric_xTQx`, $Q_{ij}=Q_{ji}=\alpha/2$). Ising map $z=1-2x$. |
 | Symbol table | Bit index → decision variable ($x_{i,t}$, $z_i$, $y_s$, $r_k$), with the source draw / SPV / window / band ID. The validator uses it to decode a bitstring back into a schedule. |
 | Compile report | Input hashes and the `PenaltyPolicy` version. Bit count, density of $Q$, slack / one-hot overhead. Money scaling factor. Excluded items and reason codes. The penalty-floor check for each $c \in H$. |
 
