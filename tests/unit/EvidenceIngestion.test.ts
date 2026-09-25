@@ -69,7 +69,7 @@ describe('Evidence Ingestion Service', () => {
       expect(events).toHaveLength(1);
       expect(events[0].eventType).toBe(EventType.EVIDENCE_SUBMITTED);
       expect(events[0].actorId).toBe('user_1');
-      expect(events[0].metadata.evidenceId).toBe(result.evidenceId);
+      expect(events[0].payload.evidenceId).toBe(result.evidenceId);
     });
 
     it('creates an evidence record when submitted with a valid 64-char document hash', async () => {
