@@ -217,6 +217,14 @@ export type AppendInput = {
   metadata?: Record<string, unknown>;
 };
 
+/** 64 zeros: previous_event_hash of the first event in a chain. */
+export const GENESIS_HASH = '0'.repeat(64);
+
+/** Anything the draw machine can write events to: in-memory for unit tests, Postgres for the ledger. */
+export interface AuditLog {
+  append(input: AppendInput): Promise<AuditEvent>;
+}
+
 function idempotencyLookup(tenantId: string, key: string, eventType: string): string {
   return [tenantId, key, eventType].join(':');
 }
@@ -229,7 +237,7 @@ function chainLookup(
   return [tenantId, aggregateType || 'TENANT', aggregateId || tenantId].join(':');
 }
 
-export class EventStore {
+export class EventStore implements AuditLog {
   private readonly events: AuditEvent[] = [];
   private readonly byIdempotency = new Map<string, AuditEvent>();
   private readonly lastHashByChain = new Map<string, string>();
