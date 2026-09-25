@@ -916,13 +916,13 @@ The Quantum Optimization Lab is offline, nonbinding, read-only, isolated from pr
 ```text
 De-identified scenario
   → Data freeze
-  → Classical baseline
+  → Classical MIP baseline
   → QUBO compiler
   → QAOA simulator or approved research run
-  → Independent validator
+  → Independent validator (full-precision money)
   → Human review
   → Versioned policy simulation
-  → Limited pilot, if approved
+  → Limited pilot only if approved
 ```
 
 ### Valid Uses

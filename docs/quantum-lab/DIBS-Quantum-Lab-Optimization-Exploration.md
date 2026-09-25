@@ -15,13 +15,13 @@ It takes a frozen, de-identified snapshot of portfolio state and searches for be
 ```text
 De-identified scenario
   → Data freeze
-  → Classical baseline
+  → Classical MIP baseline
   → QUBO compiler
   → QAOA simulator or approved research run
-  → Independent validator
+  → Independent validator (full-precision money)
   → Human review
   → Versioned policy simulation
-  → Limited pilot, if approved
+  → Limited pilot only if approved
 ```
 
 Live Autopilot remains the only write path to capital state. QLab never receives customer documents, keys, or raw PII, and never talks to a payment partner.
