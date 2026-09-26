@@ -8,7 +8,7 @@
  * No template literals — GitHub web editor corrupts dollar-brace.
  */
 
-import type { EventStore } from '../audit/event-store';
+import type { AuditLog } from '../audit/event-store';
 import { EventType } from '../audit/event-store';
 
 export type DrawRequestState =
@@ -174,7 +174,7 @@ export function canEnterApproved(draw: DrawRequest, ctx: ApprovalContext): boole
 export async function transitionDraw(
   draw: DrawRequest,
   target: DrawRequestState,
-  eventStore: EventStore,
+  eventStore: AuditLog,
   actor: { id: string; type: 'USER' | 'SYSTEM' | 'PARTNER' | 'SUPER_AGENT'; role: string },
   extras?: {
     approvalContext?: ApprovalContext;
@@ -260,7 +260,7 @@ export function validateReleasePreconditions(
 export async function transitionState(
   draw: DrawRequest,
   target: DrawRequestState,
-  eventStore: EventStore,
+  eventStore: AuditLog,
   actor: { id: string; role: string }
 ): Promise<DrawRequest> {
   return transitionDraw(draw, target, eventStore, {
