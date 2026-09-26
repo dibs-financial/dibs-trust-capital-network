@@ -20,7 +20,7 @@ export function createSettlementRouter(
    */
   router.post('/instruction', async (req, res) => {
     try {
-      const tenantId = req.tenantId || req.body.tenantId;
+      const tenantId = req.tenantId;
       if (!tenantId) {
         return res.status(400).json({ error: 'TENANT_ID_REQUIRED' });
       }
@@ -60,7 +60,7 @@ export function createSettlementRouter(
    */
   router.post('/confirm/:instructionId', async (req, res) => {
     try {
-      const tenantId = req.tenantId || req.body.tenantId;
+      const tenantId = req.tenantId;
       if (!tenantId) {
         return res.status(400).json({ error: 'TENANT_ID_REQUIRED' });
       }
@@ -99,7 +99,7 @@ export function createSettlementRouter(
    * GET /exceptions — List unresolved reconciliation exceptions
    */
   router.get('/exceptions', (req, res) => {
-    const tenantId = req.tenantId || req.query.tenantId as string;
+    const tenantId = req.tenantId;
     if (!tenantId) {
       return res.status(400).json({ error: 'TENANT_ID_REQUIRED' });
     }
@@ -113,7 +113,7 @@ export function createSettlementRouter(
    */
   router.post('/exceptions/:exceptionId/resolve', async (req, res) => {
     try {
-      const tenantId = req.tenantId || req.body.tenantId;
+      const tenantId = req.tenantId;
       if (!tenantId) {
         return res.status(400).json({ error: 'TENANT_ID_REQUIRED' });
       }

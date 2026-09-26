@@ -13,7 +13,7 @@ export function createReportingRouter(reportingEngine: ReportingEngine): Router 
    * Query: dateFrom, dateTo, entityScope, projectScope, assetScope, format
    */
   router.get('/report/:reportType', async (req, res) => {
-    const tenantId = req.tenantId || req.query.tenantId as string;
+    const tenantId = req.tenantId;
     if (!tenantId) {
       return res.status(400).json({ error: 'TENANT_ID_REQUIRED' });
     }
@@ -48,11 +48,12 @@ export function createReportingRouter(reportingEngine: ReportingEngine): Router 
   });
 
   /**
-   * GET /dashboard/:tenantId — Real-time dashboard data
+   * GET /dashboard — Real-time dashboard data for the caller's tenant
    */
-  router.get('/dashboard/:tenantId', async (req, res) => {
+  router.get('/dashboard', async (req, res) => {
     try {
-      const data = await reportingEngine.getDashboardData(req.params.tenantId);
+      if (!req.tenantId) return res.status(401).json({ error: 'TOKEN_REQUIRED' });
+      const data = await reportingEngine.getDashboardData(req.tenantId);
       res.json(data);
     } catch (err) {
       res.status(400).json({ error: (err as Error).message });
@@ -60,15 +61,16 @@ export function createReportingRouter(reportingEngine: ReportingEngine): Router 
   });
 
   /**
-   * GET /audit-log/:tenantId — Audit event log with pagination
+   * GET /audit-log — Audit event log for the caller's tenant, with pagination
    * Query: skip, limit
    */
-  router.get('/audit-log/:tenantId', async (req, res) => {
+  router.get('/audit-log', async (req, res) => {
     try {
+      if (!req.tenantId) return res.status(401).json({ error: 'TOKEN_REQUIRED' });
       const skip = parseInt(req.query.skip as string) || 0;
       const limit = parseInt(req.query.limit as string) || 100;
       // TODO: Call eventStore.getByTenant with pagination
-      res.json({ tenantId: req.params.tenantId, skip, limit, events: [] });
+      res.json({ tenantId: req.tenantId, skip, limit, events: [] });
     } catch (err) {
       res.status(400).json({ error: (err as Error).message });
     }

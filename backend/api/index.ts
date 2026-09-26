@@ -53,10 +53,11 @@ import {
 
 import { createApiMarketplaceRouter, ApiKeyManager } from './marketplace';
 
+import { authenticate, requireRole, sessionOf, TokenVerifier, verifierFromEnv } from './auth';
+
 declare global {
   namespace Express {
     interface Request {
-      tenantId?: string;
       apiKey?: any;
     }
   }
@@ -66,29 +67,23 @@ function newId(prefix: string): string {
   return prefix + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
 }
 
+/**
+ * Tenant comes only from the verified access token (authenticate() in auth.ts,
+ * mounted on /api). This guard just refuses a route reached without one.
+ */
 function tenantIsolation(req: Request, res: Response, next: NextFunction): void {
-  const tenantId = req.headers['x-dibs-tenant'] as string;
-  if (!tenantId) {
-    res.status(401).json({ error: 'TENANT_REQUIRED' });
+  if (!req.auth) {
+    res.status(401).json({ error: 'TOKEN_REQUIRED' });
     return;
   }
-  (req as any).tenantId = tenantId;
+  req.tenantId = req.auth.tenantId;
   next();
 }
 
-function requireRole(...roles: string[]) {
-  return (req: Request, res: Response, next: NextFunction): void => {
-    const role = (req.headers['x-dibs-role'] as string) || 'viewer';
-    if (!roles.includes(role)) {
-      res.status(403).json({
-        error: 'INSUFFICIENT_ROLE',
-        required: roles,
-        provided: role,
-      });
-      return;
-    }
-    next();
-  };
+/** The actor on an audit event: the token's subject and its first role. */
+function actorOf(req: Request): { id: string; role: string } {
+  const s = sessionOf(req);
+  return { id: s.subject, role: s.roles[0] || 'unassigned' };
 }
 
 function jsonDraw(draw: DrawRequest) {
@@ -149,7 +144,7 @@ function createCapitalRequestRouter(eventStore: EventStore): express.Router {
 
   router.post('/request', tenantIsolation, async (req: Request, res: Response) => {
     try {
-      const tenantId = (req as any).tenantId;
+      const tenantId = sessionOf(req).tenantId;
       const requestId = newId('dr');
       const now = new Date().toISOString();
       const idempotencyKey = (req.header('Idempotency-Key') as string) || requestId;
@@ -162,7 +157,7 @@ function createCapitalRequestRouter(eventStore: EventStore): express.Router {
         seriesId: req.body.seriesId || null,
         requestNumber: req.body.requestNumber || requestId,
         status: 'DRAFT',
-        requestedByUserId: req.body.requestedByUserId,
+        requestedByUserId: actorOf(req).id,
         payeeCounterpartyId: req.body.payeeCounterpartyId,
         payeeBankAccountId: req.body.payeeBankAccountId,
         amountRequestedMinor: BigInt(req.body.amountRequestedMinor),
@@ -187,8 +182,8 @@ function createCapitalRequestRouter(eventStore: EventStore): express.Router {
       await eventStore.append({
         eventType: EventType.DRAW_CREATED,
         tenantId: tenantId,
-        actorId: request.requestedByUserId || 'system',
-        actorRole: 'BorrowerSponsor',
+        actorId: actorOf(req).id,
+        actorRole: actorOf(req).role,
         actorType: 'USER',
         aggregateType: 'DRAW_REQUEST',
         aggregateId: request.id,
@@ -213,7 +208,7 @@ function createCapitalRequestRouter(eventStore: EventStore): express.Router {
       res.status(404).json({ error: 'REQUEST_NOT_FOUND' });
       return;
     }
-    if (request.tenantId !== (req as any).tenantId) {
+    if (request.tenantId !== sessionOf(req).tenantId) {
       res.status(403).json({ error: 'TENANT_ISOLATION_VIOLATION' });
       return;
     }
@@ -221,7 +216,7 @@ function createCapitalRequestRouter(eventStore: EventStore): express.Router {
   });
 
   router.get('/requests', tenantIsolation, (req: Request, res: Response) => {
-    const tenantId = (req as any).tenantId;
+    const tenantId = sessionOf(req).tenantId;
     const state = req.query.state as DrawRequestState | undefined;
     const tenantRequests = Array.from(requests.values()).filter(function (r) {
       return r.tenantId === tenantId && (!state || r.status === state);
@@ -238,15 +233,15 @@ function createCapitalRequestRouter(eventStore: EventStore): express.Router {
         res.status(404).json({ error: 'REQUEST_NOT_FOUND' });
         return;
       }
-      if (request.tenantId !== (req as any).tenantId) {
+      if (request.tenantId !== sessionOf(req).tenantId) {
         res.status(403).json({ error: 'TENANT_ISOLATION_VIOLATION' });
         return;
       }
 
       try {
         const targetState = req.body.targetState as DrawRequestState;
-        const actorId = req.body.actorId || 'system';
-        const actorRole = (req.headers['x-dibs-role'] as string) || 'CreditCommittee';
+        const actorId = actorOf(req).id;
+        const actorRole = actorOf(req).role;
         const extras: {
           approvalContext?: ApprovalContext;
           fundsMovedEvidence?: boolean;
@@ -287,7 +282,7 @@ function createCapitalRequestRouter(eventStore: EventStore): express.Router {
         res.status(404).json({ error: 'REQUEST_NOT_FOUND' });
         return;
       }
-      if (request.tenantId !== (req as any).tenantId) {
+      if (request.tenantId !== sessionOf(req).tenantId) {
         res.status(403).json({ error: 'TENANT_ISOLATION_VIOLATION' });
         return;
       }
@@ -306,7 +301,7 @@ function createCovenantRouter(): express.Router {
 
   router.post('/evaluate', tenantIsolation, (req: Request, res: Response) => {
     try {
-      const tenantId = (req as any).tenantId;
+      const tenantId = sessionOf(req).tenantId;
       const { covenant, measuredValue, thresholdValue } = req.body;
       const result = evaluateCovenant(
         {
@@ -338,7 +333,7 @@ function createCovenantRouter(): express.Router {
   });
 
   router.get('/evaluations', tenantIsolation, (req: Request, res: Response) => {
-    const tenantId = (req as any).tenantId;
+    const tenantId = sessionOf(req).tenantId;
     res.json(evaluations.get(tenantId) || []);
   });
 
@@ -356,8 +351,8 @@ function createExceptionRouter(eventStore: EventStore): express.Router {
         projectId: req.body.projectId,
         exceptionType: req.body.exceptionType,
         exceptionReason: req.body.exceptionReason,
-        createdBy: req.body.createdBy || 'system',
-        tenantId: (req as any).tenantId,
+        createdBy: actorOf(req).id,
+        tenantId: sessionOf(req).tenantId,
       };
       const exception = await service.createException(params);
       res.status(201).json(exception);
@@ -368,7 +363,8 @@ function createExceptionRouter(eventStore: EventStore): express.Router {
 
   router.get('/:exceptionId', tenantIsolation, (req: Request, res: Response) => {
     const exception = service.getException(req.params.exceptionId);
-    if (!exception) {
+    // Another tenant's exception is indistinguishable from a missing one.
+    if (!exception || exception.tenantId !== sessionOf(req).tenantId) {
       res.status(404).json({ error: 'EXCEPTION_NOT_FOUND' });
       return;
     }
@@ -380,7 +376,7 @@ function createExceptionRouter(eventStore: EventStore): express.Router {
       const escalated = await service.escalateException(
         req.params.exceptionId,
         req.body.escalatedTo || 'senior_approver',
-        req.body.actorId || 'system',
+        actorOf(req).id,
         req.body.reason
       );
       res.json(escalated);
@@ -399,8 +395,8 @@ function createExceptionRouter(eventStore: EventStore): express.Router {
         waiverDuration: req.body.waiverDuration,
         waiverConditions: req.body.waiverConditions,
         followUpConditions: req.body.followUpConditions,
-        requestedBy: req.body.requestedBy || 'system',
-        tenantId: (req as any).tenantId,
+        requestedBy: actorOf(req).id,
+        tenantId: sessionOf(req).tenantId,
       };
       const waiver = await service.requestWaiver(params);
       res.status(201).json(waiver);
@@ -413,8 +409,8 @@ function createExceptionRouter(eventStore: EventStore): express.Router {
     try {
       const params: ApproveWaiverParams = {
         waiverId: req.params.waiverId,
-        authorizerId: req.body.authorizerId,
-        authorizerRole: req.body.authorizerRole || 'senior_approver',
+        authorizerId: actorOf(req).id,
+        authorizerRole: actorOf(req).role,
         signedWaiverHash: req.body.signedWaiverHash || newId('hash'),
         decisionNotes: req.body.decisionNotes,
       };
@@ -429,7 +425,7 @@ function createExceptionRouter(eventStore: EventStore): express.Router {
     try {
       const result = await service.denyWaiver(
         req.params.waiverId,
-        req.body.deniedBy || 'system',
+        actorOf(req).id,
         req.body.reason || 'denied'
       );
       res.json(result);
@@ -508,9 +504,9 @@ function createPolicyLoanRouter(eventStore: EventStore): express.Router {
 
       await eventStore.append({
         eventType: EventType.CAPITAL_REQUEST_CREATED,
-        actorId: req.body.insuredId || 'system',
+        actorId: actorOf(req).id,
         actorRole: 'borrower',
-        tenantId: (req as any).tenantId,
+        tenantId: sessionOf(req).tenantId,
         payload: { policyId: policy.policyId },
       });
 
@@ -544,9 +540,9 @@ function createPolicyLoanRouter(eventStore: EventStore): express.Router {
 
       await eventStore.append({
         eventType: EventType.CAPITAL_REQUEST_APPROVED,
-        actorId: req.body.actorId || 'system',
-        actorRole: 'borrower',
-        tenantId: (req as any).tenantId,
+        actorId: actorOf(req).id,
+        actorRole: actorOf(req).role,
+        tenantId: sessionOf(req).tenantId,
         payload: {
           policyId: req.body.policyId,
           drawId: result.drawId,
@@ -616,7 +612,7 @@ function createAuditRouter(eventStore: EventStore): express.Router {
   const router = express.Router();
 
   router.get('/events', tenantIsolation, async (req: Request, res: Response) => {
-    const tenantId = (req as any).tenantId;
+    const tenantId = sessionOf(req).tenantId;
     const limit = parseInt(req.query.limit as string) || 50;
     const skip = parseInt(req.query.skip as string) || 0;
     const events = await eventStore.getByTenant(tenantId, skip, limit);
@@ -626,13 +622,22 @@ function createAuditRouter(eventStore: EventStore): express.Router {
   return router;
 }
 
-export function createApp(): express.Application {
+export interface AppOptions {
+  /** Verifies bearer tokens. Defaults to OIDC_* env; null means every /api request is refused. */
+  verifier?: TokenVerifier | null;
+}
+
+export function createApp(options: AppOptions = {}): express.Application {
   const app = express();
+  const verifier = options.verifier === undefined ? verifierFromEnv(process.env) : options.verifier;
 
   app.use(helmet());
   app.use(cors());
   app.use(morgan('combined'));
   app.use(express.json({ limit: '50mb' }));
+
+  // Every /api route: tenant and actor from the verified token only.
+  app.use('/api', authenticate(verifier));
 
   const eventStore = new EventStore();
   const settlementService = new SettlementService(eventStore);
@@ -664,12 +669,12 @@ export function createApp(): express.Application {
 
   let emergencyPaused = false;
 
-  app.post('/api/emergency/pause', requireRole('admin', 'emergency'), (_req: Request, res: Response) => {
+  app.post('/api/emergency/pause', requireRole('PlatformAdmin'), (_req: Request, res: Response) => {
     emergencyPaused = true;
     res.json({ paused: true, timestamp: new Date().toISOString() });
   });
 
-  app.post('/api/emergency/unpause', requireRole('admin', 'emergency'), (_req: Request, res: Response) => {
+  app.post('/api/emergency/unpause', requireRole('PlatformAdmin'), (_req: Request, res: Response) => {
     emergencyPaused = false;
     res.json({ paused: false, timestamp: new Date().toISOString() });
   });

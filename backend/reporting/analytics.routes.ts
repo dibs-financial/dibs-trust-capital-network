@@ -15,7 +15,7 @@ export function createAnalyticsRouter(analyticsEngine: AnalyticsEngine): Router 
    * Query: from, to (ISO dates for time range filtering)
    */
   router.get('/summary', async (req, res) => {
-    const tenantId = req.tenantId || req.query.tenantId as string;
+    const tenantId = req.tenantId;
     if (!tenantId) {
       return res.status(400).json({ error: 'TENANT_ID_REQUIRED' });
     }
@@ -39,7 +39,7 @@ export function createAnalyticsRouter(analyticsEngine: AnalyticsEngine): Router 
    * Query: from, to
    */
   router.get('/:category', async (req, res) => {
-    const tenantId = req.tenantId || req.query.tenantId as string;
+    const tenantId = req.tenantId;
     if (!tenantId) {
       return res.status(400).json({ error: 'TENANT_ID_REQUIRED' });
     }
