@@ -152,6 +152,12 @@ export class PgEventStore implements AuditLog {
     return r.rows.map(toEvent);
   }
 
+  /** One page of the chain, in order, after a given sequence number. */
+  async listPage(afterSeq: number, limit: number): Promise<Array<AuditEvent & { chainSeq: number }>> {
+    const r = await this.tx.query('SELECT * FROM audit_event WHERE chain_seq > $1 ORDER BY chain_seq LIMIT $2', [afterSeq, limit]);
+    return r.rows.map(function (row) { return { ...toEvent(row), chainSeq: Number(row.chain_seq) }; });
+  }
+
   async listForAggregate(aggregateType: string, aggregateId: string): Promise<AuditEvent[]> {
     const r = await this.tx.query(
       'SELECT * FROM audit_event WHERE aggregate_type = $1 AND aggregate_id = $2 ORDER BY chain_seq',
