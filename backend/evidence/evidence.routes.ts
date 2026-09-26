@@ -12,43 +12,35 @@ import {
 } from './evidence-ingestion';
 
 /**
- * Extracts tenant isolation context from the incoming request.
+ * Tenant for the request: only from the verified access token (authenticate()
+ * in backend/api/auth.ts). There is no header, query, body or default fallback.
  */
 export function extractTenantId(req: Request): string {
-  const tenantId =
-    (req.headers['x-tenant-id'] as string) ||
-    (req.headers['tenant-id'] as string) ||
-    (req.query.tenantId as string) ||
-    (req.body && req.body.tenantId);
-
-  if (!tenantId) {
-    return 'default-tenant';
-  }
-  return String(tenantId).trim();
+  if (!req.auth) throw new Error('UNAUTHENTICATED');
+  return req.auth.tenantId;
 }
 
 /**
- * Extracts actor audit context from the request.
+ * Actor for audit events: the token's subject and first role. policyVersion is
+ * not an identity; it is still read from the request until policy locking moves
+ * server-side.
  */
 export function extractActorContext(req: Request): { actorId: string; actorRole: string; policyVersion: string } {
-  const actorId =
-    (req.headers['x-actor-id'] as string) ||
-    (req.headers['actor-id'] as string) ||
-    (req.body && req.body.actorId) ||
-    'anonymous_user';
-
-  const actorRole =
-    (req.headers['x-actor-role'] as string) ||
-    (req.headers['actor-role'] as string) ||
-    (req.body && req.body.actorRole) ||
-    'borrower';
-
+  if (!req.auth) throw new Error('UNAUTHENTICATED');
   const policyVersion =
     (req.headers['x-policy-version'] as string) ||
     (req.body && req.body.policyVersion) ||
     'v1.0';
+  return { actorId: req.auth.subject, actorRole: req.auth.roles[0] || 'unassigned', policyVersion };
+}
 
-  return { actorId, actorRole, policyVersion };
+/** Refuses any route reached without a verified session. */
+function requireAuth(req: Request, res: Response, next: NextFunction): void {
+  if (!req.auth) {
+    res.status(401).json({ error: 'TOKEN_REQUIRED' });
+    return;
+  }
+  next();
 }
 
 /**
@@ -56,6 +48,7 @@ export function extractActorContext(req: Request): { actorId: string; actorRole:
  */
 export function createEvidenceRouter(service: EvidenceIngestionService = globalEvidenceService): Router {
   const router = Router();
+  router.use(requireAuth);
 
   /**
    * POST /submit — Submit new evidence document

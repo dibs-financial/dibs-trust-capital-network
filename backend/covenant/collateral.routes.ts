@@ -27,12 +27,18 @@ export const collateralRouter = Router();
  */
 collateralRouter.post('/hold', async (req: Request, res: Response) => {
   try {
-    const { assetId, projectId, requestId, holdReason, triggeredBy, tenantId, notes } = req.body;
+    if (!req.auth) {
+      return res.status(401).json({ error: 'TOKEN_REQUIRED' });
+    }
+    // Tenant and the person placing the hold come from the verified token.
+    const tenantId = req.auth.tenantId;
+    const triggeredBy = req.auth.subject;
+    const { assetId, projectId, requestId, holdReason, notes } = req.body;
 
-    if (!assetId || !projectId || !holdReason || !triggeredBy) {
+    if (!assetId || !projectId || !holdReason) {
       return res.status(400).json({
         error: 'INVALID_REQUEST',
-        message: 'Required fields: assetId, projectId, holdReason, triggeredBy.',
+        message: 'Required fields: assetId, projectId, holdReason.',
       });
     }
 
