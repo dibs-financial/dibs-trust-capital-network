@@ -596,6 +596,56 @@ export class DrawService {
   // CSV confirmation (dual entry) → exact match → RECONCILED, else RECONCILIATION_EXCEPTION
   // -------------------------------------------------------------------------
 
+  /**
+   * Dual entry over HTTP, step 1: the first person stages the CSV. Nothing is
+   * confirmed or reconciled until a different person submits a matching copy.
+   */
+  async stageCsvFirstEntry(session: Session, input: { batchKey: string; csv: string }): Promise<{ batchKey: string; rows: number }> {
+    assertNoClientTenant(input);
+    const rows = parseConfirmationCsv(input.csv);
+    const csvHash = sha256(input.csv);
+    return withTenantTx(this.pool, session, async function (tx) {
+      if (!input.batchKey) throw new DomainError('IDEMPOTENCY_KEY_REQUIRED');
+      const staged = await tx.query('SELECT first_entry_subject, first_entry_hash FROM csv_import_batch WHERE batch_key = $1', [input.batchKey]);
+      if (staged.rows.length > 0) {
+        // Same person, same file: a replay. Anything else reuses a key.
+        if (staged.rows[0].first_entry_subject === session.subject && staged.rows[0].first_entry_hash === csvHash) {
+          return { batchKey: input.batchKey, rows: rows.length };
+        }
+        throw new DomainError('BATCH_ALREADY_STAGED', input.batchKey);
+      }
+      const role = await requireRole(tx, session, CSV_ENTRY_ROLES);
+      await new PgEventStore(tx, session).append({
+        tenantId: session.tenantId,
+        eventType: 'CSV_BATCH_STAGED',
+        aggregateType: 'SETTLEMENT_CONFIRMATION',
+        aggregateId: input.batchKey,
+        actorId: session.subject,
+        actorRole: role,
+        idempotencyKey: input.batchKey + ':staged',
+        payload: { first_entry_hash: csvHash, rows: rows.length },
+      });
+      await tx.query(
+        'INSERT INTO csv_import_batch (tenant_id, batch_key, first_entry_csv, first_entry_hash, first_entry_subject) VALUES ($1,$2,$3,$4,$5)',
+        [session.tenantId, input.batchKey, input.csv, csvHash, session.subject]
+      );
+      return { batchKey: input.batchKey, rows: rows.length };
+    });
+  }
+
+  /** Dual entry over HTTP, step 2: a different person's copy must match the staged one. */
+  async confirmCsvSecondEntry(session: Session, input: { batchKey: string; csv: string }): Promise<CsvReconciliationResult[]> {
+    assertNoClientTenant(input);
+    const staged = await withTenantTx(this.pool, session, async function (tx) {
+      const r = await tx.query('SELECT first_entry_csv, first_entry_subject FROM csv_import_batch WHERE batch_key = $1', [input.batchKey]);
+      if (r.rows.length === 0) throw new DomainError('NOT_FOUND', 'batch ' + input.batchKey);
+      return { csv: String(r.rows[0].first_entry_csv), subject: String(r.rows[0].first_entry_subject) };
+    });
+    // The first entrant is taken from the staged row, never from this request.
+    const entrant: Session = { tenantId: session.tenantId, subject: staged.subject };
+    return this.importCsvConfirmations(entrant, session, { firstEntryCsv: staged.csv, secondEntryCsv: input.csv, batchKey: input.batchKey });
+  }
+
   async importCsvConfirmations(
     entrant: Session,
     confirmer: Session,

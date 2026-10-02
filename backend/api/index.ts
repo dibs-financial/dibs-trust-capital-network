@@ -10,14 +10,6 @@ import morgan from 'morgan';
 
 import { EventStore, EventType } from '../audit/event-store';
 
-import {
-  DrawRequest,
-  DrawRequestState,
-  ApprovalContext,
-  approvalFailures,
-  transitionDraw,
-} from '../workflow/draw-request';
-
 import { createEvidenceRouter } from '../evidence/evidence.routes';
 import { globalEvidenceService } from '../evidence/evidence-ingestion';
 
@@ -53,7 +45,9 @@ import {
 
 import { createApiMarketplaceRouter, ApiKeyManager } from './marketplace';
 
+import { Pool } from 'pg';
 import { authenticate, requireRole, sessionOf, TokenVerifier, verifierFromEnv } from './auth';
+import { createConfirmationsRouter, createDrawsRouter, createLedgerRouter } from './draws.routes';
 
 declare global {
   namespace Express {
@@ -84,215 +78,6 @@ function tenantIsolation(req: Request, res: Response, next: NextFunction): void 
 function actorOf(req: Request): { id: string; role: string } {
   const s = sessionOf(req);
   return { id: s.subject, role: s.roles[0] || 'unassigned' };
-}
-
-function jsonDraw(draw: DrawRequest) {
-  return {
-    id: draw.id,
-    tenantId: draw.tenantId,
-    dealId: draw.dealId,
-    spvId: draw.spvId,
-    seriesId: draw.seriesId,
-    requestNumber: draw.requestNumber,
-    status: draw.status,
-    requestedByUserId: draw.requestedByUserId,
-    payeeCounterpartyId: draw.payeeCounterpartyId,
-    payeeBankAccountId: draw.payeeBankAccountId,
-    amountRequestedMinor: draw.amountRequestedMinor.toString(),
-    amountApprovedMinor:
-      draw.amountApprovedMinor === null ? null : draw.amountApprovedMinor.toString(),
-    currency: draw.currency,
-    budgetLineIds: draw.budgetLineIds,
-    requestedAt: draw.requestedAt,
-    submittedAt: draw.submittedAt,
-    lockedPolicyVersion: draw.lockedPolicyVersion,
-    lockedEvidenceManifestHash: draw.lockedEvidenceManifestHash,
-    approvalBindingHash: draw.approvalBindingHash,
-    policyEvaluationId: draw.policyEvaluationId,
-    idempotencyKey: draw.idempotencyKey,
-    createdAt: draw.createdAt,
-    updatedAt: draw.updatedAt,
-  };
-}
-
-function parseApprovalContext(body: any): ApprovalContext {
-  return {
-    manifestComplete: !!body.manifestComplete,
-    manifestItemExpiredOrUnverified: !!body.manifestItemExpiredOrUnverified,
-    remainingBudgetMinor: BigInt(body.remainingBudgetMinor || '0'),
-    eligibleThisDrawMinor: BigInt(body.eligibleThisDrawMinor || '0'),
-    retainageApplied: !!body.retainageApplied,
-    covenantStatus: body.covenantStatus || 'CURRENT',
-    waiverCoversBreach: !!body.waiverCoversBreach,
-    loanInBalancePasses: !!body.loanInBalancePasses,
-    deficiencyDepositConfirmed: !!body.deficiencyDepositConfirmed,
-    requiredApprovalsRecorded: !!body.requiredApprovalsRecorded,
-    approversDistinctFromRequester: !!body.approversDistinctFromRequester,
-    noApproverIsInstructor: !!body.noApproverIsInstructor,
-    openHold: !!body.openHold,
-    payeeVerified: !!body.payeeVerified,
-    sanctionsFresh: !!body.sanctionsFresh,
-    settlementRouteValid: !!body.settlementRouteValid,
-    policyVersionMatchesLock: !!body.policyVersionMatchesLock,
-    manifestHashMatchesLock: !!body.manifestHashMatchesLock,
-  };
-}
-
-function createCapitalRequestRouter(eventStore: EventStore): express.Router {
-  const router = express.Router();
-  const requests = new Map<string, DrawRequest>();
-
-  router.post('/request', tenantIsolation, async (req: Request, res: Response) => {
-    try {
-      const tenantId = sessionOf(req).tenantId;
-      const requestId = newId('dr');
-      const now = new Date().toISOString();
-      const idempotencyKey = (req.header('Idempotency-Key') as string) || requestId;
-
-      const request: DrawRequest = {
-        id: requestId,
-        tenantId: tenantId,
-        dealId: req.body.dealId,
-        spvId: req.body.spvId,
-        seriesId: req.body.seriesId || null,
-        requestNumber: req.body.requestNumber || requestId,
-        status: 'DRAFT',
-        requestedByUserId: actorOf(req).id,
-        payeeCounterpartyId: req.body.payeeCounterpartyId,
-        payeeBankAccountId: req.body.payeeBankAccountId,
-        amountRequestedMinor: BigInt(req.body.amountRequestedMinor),
-        amountApprovedMinor: req.body.amountApprovedMinor
-          ? BigInt(req.body.amountApprovedMinor)
-          : null,
-        currency: req.body.currency || 'USD',
-        budgetLineIds: req.body.budgetLineIds || [],
-        requestedAt: now,
-        submittedAt: null,
-        lockedPolicyVersion: req.body.lockedPolicyVersion || null,
-        lockedEvidenceManifestHash: req.body.lockedEvidenceManifestHash || null,
-        approvalBindingHash: null,
-        policyEvaluationId: null,
-        idempotencyKey: idempotencyKey,
-        createdAt: now,
-        updatedAt: now,
-      };
-
-      requests.set(requestId, request);
-
-      await eventStore.append({
-        eventType: EventType.DRAW_CREATED,
-        tenantId: tenantId,
-        actorId: actorOf(req).id,
-        actorRole: actorOf(req).role,
-        actorType: 'USER',
-        aggregateType: 'DRAW_REQUEST',
-        aggregateId: request.id,
-        stateBefore: null,
-        stateAfter: 'DRAFT',
-        policyVersion: request.lockedPolicyVersion || '',
-        evidenceManifestHash: request.lockedEvidenceManifestHash || '',
-        idempotencyKey: idempotencyKey,
-        correlationId: request.id,
-        payload: { status: 'DRAFT' },
-      });
-
-      res.status(201).json(jsonDraw(request));
-    } catch (err) {
-      res.status(400).json({ error: (err as Error).message });
-    }
-  });
-
-  router.get('/request/:requestId', tenantIsolation, (req: Request, res: Response) => {
-    const request = requests.get(req.params.requestId);
-    if (!request) {
-      res.status(404).json({ error: 'REQUEST_NOT_FOUND' });
-      return;
-    }
-    if (request.tenantId !== sessionOf(req).tenantId) {
-      res.status(403).json({ error: 'TENANT_ISOLATION_VIOLATION' });
-      return;
-    }
-    res.json(jsonDraw(request));
-  });
-
-  router.get('/requests', tenantIsolation, (req: Request, res: Response) => {
-    const tenantId = sessionOf(req).tenantId;
-    const state = req.query.state as DrawRequestState | undefined;
-    const tenantRequests = Array.from(requests.values()).filter(function (r) {
-      return r.tenantId === tenantId && (!state || r.status === state);
-    });
-    res.json(tenantRequests.map(jsonDraw));
-  });
-
-  router.post(
-    '/request/:requestId/transition',
-    tenantIsolation,
-    async (req: Request, res: Response) => {
-      const request = requests.get(req.params.requestId);
-      if (!request) {
-        res.status(404).json({ error: 'REQUEST_NOT_FOUND' });
-        return;
-      }
-      if (request.tenantId !== sessionOf(req).tenantId) {
-        res.status(403).json({ error: 'TENANT_ISOLATION_VIOLATION' });
-        return;
-      }
-
-      try {
-        const targetState = req.body.targetState as DrawRequestState;
-        const actorId = actorOf(req).id;
-        const actorRole = actorOf(req).role;
-        const extras: {
-          approvalContext?: ApprovalContext;
-          fundsMovedEvidence?: boolean;
-          instructionExists?: boolean;
-          idempotencyKey?: string;
-        } = {
-          fundsMovedEvidence: !!req.body.fundsMovedEvidence,
-          instructionExists: !!req.body.instructionExists,
-          idempotencyKey: req.header('Idempotency-Key') || undefined,
-        };
-        if (targetState === 'APPROVED') {
-          extras.approvalContext = parseApprovalContext(
-            req.body.approvalContext || req.body
-          );
-        }
-
-        const updated = await transitionDraw(
-          request,
-          targetState,
-          eventStore,
-          { id: actorId, type: 'USER', role: actorRole },
-          extras
-        );
-        requests.set(request.id, updated);
-        res.json(jsonDraw(updated));
-      } catch (err) {
-        res.status(400).json({ error: (err as Error).message });
-      }
-    }
-  );
-
-  router.post(
-    '/request/:requestId/validate',
-    tenantIsolation,
-    (req: Request, res: Response) => {
-      const request = requests.get(req.params.requestId);
-      if (!request) {
-        res.status(404).json({ error: 'REQUEST_NOT_FOUND' });
-        return;
-      }
-      if (request.tenantId !== sessionOf(req).tenantId) {
-        res.status(403).json({ error: 'TENANT_ISOLATION_VIOLATION' });
-        return;
-      }
-      const ctx = parseApprovalContext(req.body.approvalContext || req.body);
-      const failures = approvalFailures(request, ctx);
-      res.json({ failures: failures, canApprove: failures.length === 0 });
-    }
-  );
-
-  return router;
 }
 
 function createCovenantRouter(): express.Router {
@@ -608,28 +393,21 @@ function createPolicyLoanRouter(eventStore: EventStore): express.Router {
   return router;
 }
 
-function createAuditRouter(eventStore: EventStore): express.Router {
-  const router = express.Router();
-
-  router.get('/events', tenantIsolation, async (req: Request, res: Response) => {
-    const tenantId = sessionOf(req).tenantId;
-    const limit = parseInt(req.query.limit as string) || 50;
-    const skip = parseInt(req.query.skip as string) || 0;
-    const events = await eventStore.getByTenant(tenantId, skip, limit);
-    res.json({ events: events, limit: limit, skip: skip, total: events.length });
-  });
-
-  return router;
-}
-
 export interface AppOptions {
   /** Verifies bearer tokens. Defaults to OIDC_* env; null means every /api request is refused. */
   verifier?: TokenVerifier | null;
+  /**
+   * Postgres pool connected as a dibs_app member. Defaults to DATABASE_URL;
+   * null means the persisted routes (draws, confirmations, ledger) answer 503.
+   */
+  pool?: Pool | null;
 }
 
 export function createApp(options: AppOptions = {}): express.Application {
   const app = express();
   const verifier = options.verifier === undefined ? verifierFromEnv(process.env) : options.verifier;
+  const pool =
+    options.pool !== undefined ? options.pool : process.env.DATABASE_URL ? new Pool({ connectionString: process.env.DATABASE_URL }) : null;
 
   app.use(helmet());
   app.use(cors());
@@ -646,8 +424,10 @@ export function createApp(options: AppOptions = {}): express.Application {
   const analyticsEngine = new AnalyticsEngine(eventStore);
   const apiKeyManager = new ApiKeyManager();
 
-  app.use('/api/audit', createAuditRouter(eventStore));
-  app.use('/api/capital', createCapitalRequestRouter(eventStore));
+  // Track A: the persisted DrawRequest workflow and its ledger (Postgres).
+  app.use('/api/draws', createDrawsRouter(pool));
+  app.use('/api/confirmations', createConfirmationsRouter(pool));
+  app.use('/api/audit', createLedgerRouter(pool));
   app.use('/api/evidence', createEvidenceRouter(globalEvidenceService));
   app.use('/api/settlement', createSettlementRouter(settlementService, reconciliationEngine));
   app.use('/api/covenant', createCovenantRouter());

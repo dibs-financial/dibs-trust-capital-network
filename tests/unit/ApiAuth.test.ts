@@ -52,7 +52,8 @@ beforeAll(async () => {
   rogueKey = (await generateKeyPair('ES256')).privateKey;
   const jwk: JWK = { ...(await exportJWK(pair.publicKey)), kid: 'idp-1', alg: 'ES256', use: 'sig' };
   const verifier = createOidcVerifier({ issuer: ISSUER, audience: AUDIENCE, jwks: createLocalJWKSet({ keys: [jwk] }) });
-  const app = createApp({ verifier: verifier });
+  // No database here: auth runs before any route, so refusals and 401s are fully exercised.
+  const app = createApp({ verifier: verifier, pool: null });
   server = await new Promise<Server>((resolve) => {
     const s = app.listen(0, () => resolve(s));
   });
@@ -74,13 +75,13 @@ describe('the client cannot choose a tenant or an identity', () => {
     ['requestedByUserId in the body', { body: { ...DRAFT, requestedByUserId: 'victim' } }, 'CLIENT_SUPPLIED_IDENTITY'],
     ['actorId in the body', { body: { ...DRAFT, actorId: 'victim' } }, 'CLIENT_SUPPLIED_IDENTITY'],
   ])('%s is refused even with a valid token', async (_label, extra, code) => {
-    const r = await call('POST', '/api/capital/request', { bearer: await user(TENANT_A, 'sponsor-a'), body: DRAFT, ...extra });
+    const r = await call('POST', '/api/draws', { bearer: await user(TENANT_A, 'sponsor-a'), body: DRAFT, ...extra });
     expect(r.status).toBe(400);
     expect(r.body.error).toBe(code);
   });
 
   it('tenantId in the query string is refused', async () => {
-    const r = await call('GET', '/api/capital/requests?tenantId=' + TENANT_B, { bearer: await user(TENANT_A, 'sponsor-a') });
+    const r = await call('GET', '/api/draws?tenantId=' + TENANT_B, { bearer: await user(TENANT_A, 'sponsor-a') });
     expect(r.status).toBe(400);
     expect(r.body.error).toBe('CLIENT_SUPPLIED_TENANT');
   });
@@ -93,7 +94,7 @@ describe('the client cannot choose a tenant or an identity', () => {
 
 describe('a verified token is required', () => {
   it('no token → 401 with a Bearer challenge', async () => {
-    const r = await call('GET', '/api/capital/requests');
+    const r = await call('GET', '/api/draws');
     expect(r.status).toBe(401);
     expect(r.body.error).toBe('TOKEN_REQUIRED');
     expect(r.headers.get('www-authenticate')).toBe('Bearer');
@@ -105,7 +106,7 @@ describe('a verified token is required', () => {
     ['wrong audience', () => token({ sub: 'x', dibs_tenant_id: TENANT_A }, { aud: 'someone-else' })],
     ['garbage', async () => 'not.a.jwt'],
   ])('token %s → 401 INVALID_TOKEN', async (_label, make) => {
-    const r = await call('GET', '/api/capital/requests', { bearer: await make() });
+    const r = await call('GET', '/api/draws', { bearer: await make() });
     expect(r.status).toBe(401);
     expect(r.body.error).toBe('INVALID_TOKEN');
   });
@@ -115,7 +116,7 @@ describe('a verified token is required', () => {
       .setProtectedHeader({ alg: 'HS256', kid: 'idp-1' })
       .setIssuer(ISSUER).setAudience(AUDIENCE).setIssuedAt().setExpirationTime('5m')
       .sign(new TextEncoder().encode('a-secret-anyone-could-hold-000000'));
-    const r = await call('GET', '/api/capital/requests', { bearer: hs });
+    const r = await call('GET', '/api/draws', { bearer: hs });
     expect(r.status).toBe(401);
   });
 
@@ -123,18 +124,18 @@ describe('a verified token is required', () => {
     ['missing', {}],
     ['not a UUID', { dibs_tenant_id: 'default-tenant' }],
   ])('tenant claim %s → 401 TENANT_CLAIM_MISSING', async (_label, claims) => {
-    const r = await call('GET', '/api/capital/requests', { bearer: await token({ sub: 'x', ...claims }) });
+    const r = await call('GET', '/api/draws', { bearer: await token({ sub: 'x', ...claims }) });
     expect(r.status).toBe(401);
     expect(r.body.error).toBe('TENANT_CLAIM_MISSING');
   });
 
   it('with no verifier configured the API fails closed', async () => {
-    const closed = createApp({ verifier: null });
+    const closed = createApp({ verifier: null, pool: null });
     const s = await new Promise<Server>((resolve) => {
       const x = closed.listen(0, () => resolve(x));
     });
     try {
-      const res = await fetch('http://127.0.0.1:' + (s.address() as AddressInfo).port + '/api/capital/requests', {
+      const res = await fetch('http://127.0.0.1:' + (s.address() as AddressInfo).port + '/api/draws', {
         headers: { authorization: 'Bearer ' + (await user(TENANT_A, 'sponsor-a')) },
       });
       expect(res.status).toBe(401);
@@ -153,38 +154,16 @@ describe('a verified token is required', () => {
   });
 });
 
-describe('tenant and actor come from the token', () => {
-  it('the draft is owned by the token tenant and requested by the token subject', async () => {
-    const r = await call('POST', '/api/capital/request', { bearer: await user(TENANT_A, 'sponsor-a'), body: DRAFT });
-    expect(r.status).toBe(201);
-    expect(r.body.tenantId).toBe(TENANT_A);
-    expect(r.body.requestedByUserId).toBe('sponsor-a');
-    expect(r.body.amountRequestedMinor).toBe('2500000');
-  });
-
-  it('two tenants cannot see each other’s draws', async () => {
-    const created = await call('POST', '/api/capital/request', { bearer: await user(TENANT_A, 'sponsor-a'), body: DRAFT });
-    const asB = await user(TENANT_B, 'sponsor-b');
-    const direct = await call('GET', '/api/capital/request/' + created.body.id, { bearer: asB });
-    expect(direct.status).toBe(403);
-    const list = await call('GET', '/api/capital/requests', { bearer: asB });
-    expect(list.status).toBe(200);
-    expect(list.body.map((d: { id: string }) => d.id)).not.toContain(created.body.id);
-  });
-
-  it('the audit event records the token subject and role, not client input', async () => {
-    await call('POST', '/api/capital/request', { bearer: await user(TENANT_B, 'sponsor-b2', ['OperationsOwner']), body: DRAFT });
-    const events = await call('GET', '/api/audit/events', { bearer: await user(TENANT_B, 'auditor-b', ['Auditor']) });
-    expect(events.status).toBe(200);
-    const created = events.body.events.filter((e: { actorId: string }) => e.actorId === 'sponsor-b2');
-    expect(created.length).toBeGreaterThan(0);
-    expect(created[0].actorRole).toBe('OperationsOwner');
-    expect(events.body.events.every((e: { tenantId: string }) => e.tenantId === TENANT_B)).toBe(true);
-  });
-
-  it('role gates read token roles: emergency pause needs PlatformAdmin', async () => {
+describe('role gates on the remaining in-memory routes', () => {
+  it('emergency pause needs PlatformAdmin in the token', async () => {
     expect((await call('POST', '/api/emergency/pause', { bearer: await user(TENANT_A, 'ops', ['OperationsOwner']) })).status).toBe(403);
     expect((await call('POST', '/api/emergency/pause', { bearer: await user(TENANT_A, 'root', ['PlatformAdmin']) })).status).toBe(200);
     await call('POST', '/api/emergency/unpause', { bearer: await user(TENANT_A, 'root', ['PlatformAdmin']) });
+  });
+
+  it('without a database the persisted draw routes refuse instead of falling back to memory', async () => {
+    const r = await call('GET', '/api/draws', { bearer: await user(TENANT_A, 'sponsor-a') });
+    expect(r.status).toBe(503);
+    expect(r.body.error).toBe('DATABASE_NOT_CONFIGURED');
   });
 });

@@ -34,4 +34,24 @@ contracts/            PARKED
 - Money is `BIGINT` + `CHAR(3)` in Postgres, `bigint` in TypeScript and decimal strings at the edge. Never `Number()`.
 - Integration tests: `tests/integration/`, one throwaway database per file. They need `DATABASE_URL` (an owner connection); CI provides Postgres.
 
+## HTTP
+
+All `/api` routes require `Authorization: Bearer <OIDC token>` (`backend/api/auth.ts`). Tenant and actor come from the token; a request that names either is refused. Roles for the draw workflow are read from `user_role`, not the token. Every write needs an `Idempotency-Key` header. Money is a decimal string of minor units.
+
+```text
+POST /api/draws                                   create DRAFT
+GET  /api/draws · /api/draws/:id
+POST /api/draws/:id/evidence                      { documentType, contentBase64, storageUri, sourceSystem }
+POST /api/draws/:id/evidence/:documentId/verify
+POST /api/draws/:id/submit                        freezes policy version + manifest hash
+POST /api/draws/:id/evaluate
+POST /api/draws/:id/approve                       { amountApprovedMinor, controls }
+POST /api/draws/:id/instruct                      { externalPartnerId, settlementReference }
+PUT  /api/confirmations/csv-batches/:key          text/csv, first entry
+POST /api/confirmations/csv-batches/:key/confirm  text/csv, second entry by a different person
+GET  /api/audit/events?afterSeq=&limit= · /api/audit/verify
+```
+
+Without `DATABASE_URL` these routes answer 503; they never fall back to memory.
+
 Specs: `docs/architecture/DIBS-Trust-Capital-Network-Master-Scaffold.md`, `docs/architecture/DIBS-Implementation-Plan.md`.
